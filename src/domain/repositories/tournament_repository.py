@@ -1,6 +1,6 @@
 """TournamentRepository — domain operations for the Tournament aggregate root."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -19,26 +19,26 @@ class TournamentRepository(BaseRepository[Tournament]):
     # ── Specific queries ───────────────────────────────────────────────────────
 
     def get_by_name(self, name: str) -> List[Tournament]:
-        """Return tournaments whose name contains the given string (case-insensitive)."""
+        """Return tournaments whose name contains the string (case-insensitive)."""
         stmt = select(Tournament).where(Tournament.name.ilike(f"%{name}%"))
         return list(self._session.scalars(stmt).all())
 
     def get_by_location(self, location: str) -> List[Tournament]:
-        """Return tournaments at the given location."""
+        """Return tournaments at the given location (case-insensitive partial match)."""
         stmt = select(Tournament).where(Tournament.location.ilike(f"%{location}%"))
         return list(self._session.scalars(stmt).all())
 
     def get_active_tournaments(self) -> List[Tournament]:
         """Return tournaments whose end_date is in the future (or not set)."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         stmt = select(Tournament).where(
             (Tournament.end_date >= now) | (Tournament.end_date.is_(None))
         )
         return list(self._session.scalars(stmt).all())
 
     def get_upcoming(self) -> List[Tournament]:
-        """Return tournaments that have not started yet."""
-        now = datetime.utcnow()
+        """Return tournaments that have not started yet, ordered by start date."""
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         stmt = (
             select(Tournament)
             .where(Tournament.start_date > now)
@@ -56,7 +56,10 @@ class TournamentRepository(BaseRepository[Tournament]):
         area_size: Optional[float] = None,
         is_active: bool = True,
     ) -> Tatami:
+        """Create a new tatami and attach it to a tournament.
 
+        Raises ValueError if the tournament does not exist.
+        """
         tournament = self.get(tournament_id)
         if tournament is None:
             raise ValueError(f"Tournament with id={tournament_id} not found.")

@@ -1,7 +1,13 @@
-"""Shared declarative base for all ORM models."""
+"""
+Shared declarative base — re-exported from src.domain.db.
 
-from sqlalchemy.orm import DeclarativeBase
+All models import Base from here so there is a single source of truth:
+    from .base import Base
 
+The actual Base class lives in src/domain/db.py so that Alembic,
+the engine, and the models all share the exact same metadata object.
+"""
 
-class Base(DeclarativeBase):
-    pass
+from src.domain.db import Base  # single source of truth
+
+__all__ = ["Base"]

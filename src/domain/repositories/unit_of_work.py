@@ -1,12 +1,10 @@
-"""
-Unit of Work — manages a single database session shared across all repositories.
-"""
+"""Unit of Work — manages a single database session shared across all repositories."""
 
 from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from config.database import get_session_factory
+from src.domain.db import Session as DefaultSession
 from .fighter_repository import FighterRepository
 from .tournament_repository import TournamentRepository
 from .category_repository import CategoryRepository
@@ -15,9 +13,20 @@ from .registration_repository import RegistrationRepository
 
 
 class UnitOfWork:
+    """Wraps a database session and exposes one repository per aggregate root.
+
+    Usage:
+        with UnitOfWork() as uow:
+            uow.fighters.add(fighter)
+            uow.commit()
+
+    The session_factory parameter lets tests inject an in-memory SQLite session:
+        with UnitOfWork(session_factory=TestSession) as uow:
+            ...
+    """
 
     def __init__(self, session_factory=None) -> None:
-        self._session_factory = session_factory or get_session_factory()
+        self._session_factory = session_factory or DefaultSession
 
     def __enter__(self) -> "UnitOfWork":
         self._session: Session = self._session_factory()
@@ -40,4 +49,4 @@ class UnitOfWork:
         if exc_type is not None:
             self.rollback()
         self._session.close()
-        return False
+        return False  # do not suppress exceptions

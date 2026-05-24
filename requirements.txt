@@ -1,6 +1,7 @@
 sqlalchemy>=2.0
-psycopg2-binary
-alembic
-python-dotenv
+psycopg2-binary>=2.9
+alembic>=1.13
+python-dotenv>=1.0
+rich>=13.0
 ipykernel
 jupyter

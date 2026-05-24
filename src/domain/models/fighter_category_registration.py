@@ -15,6 +15,11 @@ if TYPE_CHECKING:
 
 
 class FighterCategoryRegistration(Base):
+    """Registration of a fighter in a specific category and tournament.
+
+    Composite PK: (fighter_id, category_id, tournament_id).
+    Carries its own attributes: weight at weigh-in and approval status.
+    """
 
     __tablename__ = "fighter_category_registration"
 

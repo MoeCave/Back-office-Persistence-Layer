@@ -19,10 +19,8 @@ class FighterRepository(BaseRepository[Fighter]):
     # ── Specific queries ───────────────────────────────────────────────────────
 
     def get_by_last_name(self, last_name: str) -> List[Fighter]:
-        """Return all fighters whose last name matches (case-insensitive)."""
-        stmt = select(Fighter).where(
-            Fighter.last_name.ilike(f"%{last_name}%")
-        )
+        """Return all fighters whose last name contains the string (case-insensitive)."""
+        stmt = select(Fighter).where(Fighter.last_name.ilike(f"%{last_name}%"))
         return list(self._session.scalars(stmt).all())
 
     def get_by_belt_level(self, belt_level: str) -> List[Fighter]:
@@ -36,13 +34,14 @@ class FighterRepository(BaseRepository[Fighter]):
         return list(self._session.scalars(stmt).all())
 
     def get_by_email(self, email: str) -> Optional[Fighter]:
-        """Return a fighter by their email address (unique)."""
+        """Return a fighter by their unique email address."""
         stmt = select(Fighter).where(Fighter.email == email)
         return self._session.scalars(stmt).first()
 
     # ── Pagination (Fighter has the highest expected row count) ───────────────
 
     def get_paginated(self, page: int = 1, page_size: int = 10) -> List[Fighter]:
+        """Return a page of fighters ordered by last name, first name."""
         offset = (page - 1) * page_size
         stmt = (
             select(Fighter)
@@ -52,12 +51,7 @@ class FighterRepository(BaseRepository[Fighter]):
         )
         return list(self._session.scalars(stmt).all())
 
-    def count(self) -> int:
-        """Return the total number of fighters in the database."""
-        from sqlalchemy import func, select
-
-        stmt = select(func.count()).select_from(Fighter)
-        return self._session.execute(stmt).scalar_one()
+    # count() is inherited from BaseRepository
 
     # ── Domain operations ─────────────────────────────────────────────────────
 
@@ -69,7 +63,10 @@ class FighterRepository(BaseRepository[Fighter]):
         conditions: Optional[str] = None,
         doctor_name: Optional[str] = None,
     ) -> MedicalRecord:
-        
+        """Create and attach a medical record to a fighter.
+
+        Raises ValueError if the fighter does not exist or already has a record.
+        """
         fighter = self.get(fighter_id)
         if fighter is None:
             raise ValueError(f"Fighter with id={fighter_id} not found.")
@@ -94,7 +91,10 @@ class FighterRepository(BaseRepository[Fighter]):
         category_id: int,
         tournament_id: int,
     ) -> FighterCategoryRegistration:
-        
+        """Approve a pending registration for a fighter in a category/tournament.
+
+        Raises ValueError if the registration does not exist.
+        """
         stmt = select(FighterCategoryRegistration).where(
             FighterCategoryRegistration.fighter_id == fighter_id,
             FighterCategoryRegistration.category_id == category_id,

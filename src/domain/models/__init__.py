@@ -8,6 +8,12 @@ from src.domain.models.fighter_category_registration import FighterCategoryRegis
 from src.domain.models.match import Match
 
 __all__ = [
-    "Base", "Fighter", "MedicalRecord", "Tournament",
-    "Tatami", "Category", "FighterCategoryRegistration", "Match",
+    "Base",
+    "Fighter",
+    "MedicalRecord",
+    "Tournament",
+    "Tatami",
+    "Category",
+    "FighterCategoryRegistration",
+    "Match",
 ]

@@ -1,56 +1,36 @@
+# Environment — keep .env.example, ignore .env
+.env
+!.env.example
+
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
 *.pyo
-*.pyd
-.Python
-*.egg
+.venv/
+venv/
 *.egg-info/
 dist/
 build/
-eggs/
-parts/
-var/
-sdist/
-develop-eggs/
-.installed.cfg
-lib/
-lib64/
-wheels/
+.eggs/
 
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
 
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
-# Environment / secrets
-.env
-*.env
-!.env.example
-
-# SQLite databases
-*.db
-*.sqlite
-*.sqlite3
-
-# IDE
+# IDEs
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# OS
 .DS_Store
+Thumbs.db
 
-# Alembic (keep versions, ignore pycache inside)
-alembic/__pycache__/
-alembic/versions/__pycache__/
-
-# Coverage / testing
-.coverage
-htmlcov/
-.pytest_cache/
+# Alembic (keep versions tracked)
+# alembic/versions/  ← do NOT ignore

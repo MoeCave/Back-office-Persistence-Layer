@@ -11,10 +11,12 @@ from alembic import context
 # ── Make src importable from the project root ─────────────────────────────────
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from config.database import get_database_url
-from src.domain.models.base import Base
+# Import config and Base from src/domain (same location as models)
+from src.domain.config import get_database_url
+from src.domain.db import Base  # single source of truth for metadata
 
-# Import all models so their metadata is registered
+# Import all models so their tables are registered in Base.metadata
+# Without this, autogenerate would not detect any models
 import src.domain.models  # noqa: F401
 
 # ── Alembic Config object ──────────────────────────────────────────────────────
@@ -23,11 +25,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# Alembic uses this metadata for --autogenerate
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode (no DB connection required)."""
+    """Run migrations in 'offline' mode (no live DB connection required)."""
     url = get_database_url()
     context.configure(
         url=url,
@@ -56,7 +59,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            render_as_batch=True, 
+            render_as_batch=True,
         )
 
         with context.begin_transaction():

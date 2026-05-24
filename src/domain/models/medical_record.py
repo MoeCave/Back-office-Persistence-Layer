@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 class MedicalRecord(Base):
-    """Medical information attached to a single fighter (1:1 shared PK)."""
+    """Medical information attached to a single fighter (1:1, separate PK)."""
 
     __tablename__ = "medical_record"
 

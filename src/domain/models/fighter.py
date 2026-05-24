@@ -15,7 +15,11 @@ if TYPE_CHECKING:
 
 
 class Fighter(Base):
-    """Represents a fighter / competitor."""
+    """Represents a fighter / competitor.
+
+    Aggregate root: owns MedicalRecord (1:1), FighterCategoryRegistration (1:N),
+    and participates in Match records as blue, red, or winner.
+    """
 
     __tablename__ = "fighter"
 

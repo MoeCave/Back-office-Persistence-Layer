@@ -6,6 +6,10 @@ from src.domain.repositories.registration_repository import RegistrationReposito
 from src.domain.repositories.unit_of_work import UnitOfWork
 
 __all__ = [
-    "FighterRepository", "TournamentRepository", "CategoryRepository",
-    "MatchRepository", "RegistrationRepository", "UnitOfWork",
+    "FighterRepository",
+    "TournamentRepository",
+    "CategoryRepository",
+    "MatchRepository",
+    "RegistrationRepository",
+    "UnitOfWork",
 ]

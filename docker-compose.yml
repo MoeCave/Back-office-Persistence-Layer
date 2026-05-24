@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16
+    image: postgres:16-alpine
     container_name: tournament_db
     restart: unless-stopped
     environment:
@@ -10,7 +10,21 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - tournament_data:/var/lib/postgresql/data
+
+  db_prod:
+    image: postgres:16-alpine
+    container_name: tournament_db_prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tournament_user
+      POSTGRES_PASSWORD: tournament_pass
+      POSTGRES_DB: tournament_prod
+    ports:
+      - "5433:5432"
+    volumes:
+      - tournament_data_prod:/var/lib/postgresql/data
 
 volumes:
-  postgres_data:
+  tournament_data:
+  tournament_data_prod:

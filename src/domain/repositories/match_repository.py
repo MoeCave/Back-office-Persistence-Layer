@@ -1,6 +1,6 @@
 """MatchRepository — domain operations for the Match model."""
 
-from typing import List, Optional
+from typing import List
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,7 +15,7 @@ class MatchRepository(BaseRepository[Match]):
         super().__init__(session, Match)
 
     def get_by_tournament(self, tournament_id: int) -> List[Match]:
-        """Return all matches for a given tournament."""
+        """Return all matches for a given tournament, ordered by round and time."""
         stmt = (
             select(Match)
             .where(Match.tournament_id == tournament_id)

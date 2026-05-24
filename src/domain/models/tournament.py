@@ -15,7 +15,11 @@ if TYPE_CHECKING:
 
 
 class Tournament(Base):
-    """A tournament / competition event."""
+    """A tournament / competition event.
+
+    Aggregate root: owns Tatami (1:N), Match (1:N),
+    and FighterCategoryRegistration (1:N).
+    """
 
     __tablename__ = "tournament"
 

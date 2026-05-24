@@ -23,9 +23,8 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*", "config*"]
+include = ["src*"]   # config* removed — config now lives inside src/domain/
 
-# ── Pytest ────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 testpaths = ["notebooks"]
 pythonpath = ["."]
