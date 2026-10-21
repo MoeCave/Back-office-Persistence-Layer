@@ -3,7 +3,15 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -17,20 +25,25 @@ class Tatami(Base):
 
     __tablename__ = "tatami"
 
-    tatami_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tatami_id: Mapped[int] = mapped_column(
+        primary_key=True, autoincrement=True
+    )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     mat_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     area_size: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
 
     tournament_id: Mapped[int] = mapped_column(
-        ForeignKey("tournament.tournament_id", ondelete="CASCADE"), nullable=False
+        ForeignKey("tournament.tournament_id", ondelete="CASCADE"),
+        nullable=False,
     )
     last_update: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, onupdate=func.now()
     )
 
-    # ── Relationships ──────────────────────────────────────────────────────────
+    # ── Relationships ────────────────────────────────────────────────────────
     tournament: Mapped["Tournament"] = relationship(
         "Tournament", back_populates="tatamis"
     )

@@ -10,13 +10,10 @@ from __future__ import annotations
 
 import argparse
 import sys
-import os
-
-sys.path.insert(0, os.path.dirname(__file__))
 
 from src.client.gateway import ServerGateway, ConnectionFailedError
 from src.client.ui.main_menu import run_main_menu
-from src.ui.console import console
+from src.client.ui.console import console
 
 
 def main() -> None:
@@ -33,6 +30,11 @@ def main() -> None:
                 f"[success]  Connected to server at {args.host}:{args.port}[/]"
             )
             run_main_menu(gw)
+    except ConnectionError as exc:
+        console.print(f"[error]  Connection to the server lost: {exc}[/]")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[info]  Interrupted by user.[/]")
     except ConnectionFailedError as exc:
         console.print(f"[error]  {exc}[/]")
         console.print("[info]  Start the server with:  python server.py[/]")

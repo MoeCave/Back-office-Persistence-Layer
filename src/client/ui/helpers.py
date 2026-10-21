@@ -12,22 +12,31 @@ from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 from rich.text import Text
 
+from src.client.gateway import ServerError
+
 from .console import console
 
 T = TypeVar("T")
 
 
-# ── Input helpers ──────────────────────────────────────────────────────────────
+# ── Input helpers ────────────────────────────────────────────────────────────
+
 
 def ask(label: str, default: str = "") -> str:
     """Ask for a string value. Empty input returns the default."""
-    result = Prompt.ask(f"[prompt]  {label}[/]", default=default, console=console)
+    result = Prompt.ask(
+        f"[prompt]  {label}[/]", default=default, console=console
+    )
     return result.strip()
 
 
 def ask_optional(label: str) -> Optional[str]:
     """Ask for an optional string. Blank input → None."""
-    result = Prompt.ask(f"[prompt]  {label} (leave blank to skip)[/]", default="", console=console)
+    result = Prompt.ask(
+        f"[prompt]  {label} (leave blank to skip)[/]",
+        default="",
+        console=console,
+    )
     result = result.strip()
     return result if result else None
 
@@ -35,7 +44,9 @@ def ask_optional(label: str) -> Optional[str]:
 def ask_int(label: str, default: Optional[int] = None) -> int:
     """Ask for a required integer."""
     if default is not None:
-        return IntPrompt.ask(f"[prompt]  {label}[/]", default=default, console=console)
+        return IntPrompt.ask(
+            f"[prompt]  {label}[/]", default=default, console=console
+        )
     return IntPrompt.ask(f"[prompt]  {label}[/]", console=console)
 
 
@@ -65,10 +76,14 @@ def ask_float_optional(label: str) -> Optional[float]:
 
 def ask_bool(label: str, default: bool = False) -> bool:
     """Ask a yes/no question."""
-    return Confirm.ask(f"[prompt]  {label}[/]", default=default, console=console)
+    return Confirm.ask(
+        f"[prompt]  {label}[/]", default=default, console=console
+    )
 
 
-def choose_from_list(items: List[T], label_fn: Callable[[T], str], title: str) -> Optional[T]:
+def choose_from_list(
+    items: List[T], label_fn: Callable[[T], str], title: str
+) -> Optional[T]:
     """
     Display a numbered list and let the user pick one item.
     Returns the selected item, or None if the user cancels.
@@ -80,38 +95,23 @@ def choose_from_list(items: List[T], label_fn: Callable[[T], str], title: str) -
     console.print(f"\n[header]  {title}[/]")
     for i, item in enumerate(items, start=1):
         console.print(f"  [muted]{i:>3}.[/] {label_fn(item)}")
-    console.print(f"  [muted]  0.[/] Cancel")
+    console.print("  [muted]  0.[/] Cancel")
 
     while True:
-        choice = IntPrompt.ask(f"[prompt]  Choose[/]", default=0, console=console)
+        choice = IntPrompt.ask(
+            "[prompt]  Choose[/]", default=0, console=console
+        )
         if choice == 0:
             return None
         if 1 <= choice <= len(items):
             return items[choice - 1]
-        console.print(f"[error]  Enter a number between 0 and {len(items)}.[/]")
+        console.print(
+            f"[error]  Enter a number between 0 and {len(items)}.[/]"
+        )
 
 
-def paginate_list(items: List[T], page_size: int = 10) -> None:
-    """Print items in paginated chunks, waiting for input between pages."""
-    total = len(items)
-    if total == 0:
-        return
-    start = 0
-    while start < total:
-        end = min(start + page_size, total)
-        yield items[start:end]
-        start = end
-        if start < total:
-            cont = Confirm.ask(
-                f"[muted]  Showing {end}/{total}. Continue?[/]",
-                default=True,
-                console=console,
-            )
-            if not cont:
-                break
+# ── Display helpers ──────────────────────────────────────────────────────────
 
-
-# ── Display helpers ────────────────────────────────────────────────────────────
 
 def section(title: str) -> None:
     """Print a styled section header."""
@@ -132,7 +132,9 @@ def info(msg: str) -> None:
 
 
 def show_panel(title: str, content: str, style: str = "cyan") -> None:
-    console.print(Panel(content, title=f"[bold]{title}[/]", border_style=style))
+    console.print(
+        Panel(content, title=f"[bold]{title}[/]", border_style=style)
+    )
 
 
 def empty_table_msg(entity: str) -> None:
@@ -142,18 +144,24 @@ def empty_table_msg(entity: str) -> None:
 def rel_badge(kind: str) -> Text:
     """Return a styled relationship badge for table display."""
     badges = {
-        "1:1":        Text("1:1",        style="rel_1_1 bold"),
-        "1:N":        Text("1:N",        style="rel_1_n bold"),
-        "N:M":        Text("N:M",        style="rel_n_m bold"),
-        "N:M+attrs":  Text("N:M+attrs",  style="rel_n_m_attr bold"),
+        "1:1": Text("1:1", style="rel_1_1 bold"),
+        "1:N": Text("1:N", style="rel_1_n bold"),
+        "N:M": Text("N:M", style="rel_n_m bold"),
+        "N:M+attrs": Text("N:M+attrs", style="rel_n_m_attr bold"),
     }
     return badges.get(kind, Text(kind))
 
 
 def make_table(*headers: str, title: str = "") -> Table:
     """Create a Rich Table with consistent styling."""
-    t = Table(title=title, show_header=True, header_style="header",
-              border_style="dim", expand=False, highlight=True)
+    t = Table(
+        title=title,
+        show_header=True,
+        header_style="header",
+        border_style="dim",
+        expand=False,
+        highlight=True,
+    )
     for h in headers:
         t.add_column(h)
     return t
@@ -161,4 +169,27 @@ def make_table(*headers: str, title: str = "") -> Table:
 
 def pause() -> None:
     """Wait for the user to press Enter before continuing."""
-    Prompt.ask("\n[muted]  Press Enter to continue[/]", default="", console=console)
+    Prompt.ask(
+        "\n[muted]  Press Enter to continue[/]", default="", console=console
+    )
+
+
+def fighter_label(fighter: dict[str, Any]) -> str:
+    """Return a one-line label such as ``Ana Lopez (belt: blue)``."""
+    belt = fighter.get("belt_level") or "?"
+    return f"{fighter['first_name']} {fighter['last_name']} (belt: {belt})"
+
+
+def run_handler(handler: Callable[[Any], None], gateway: Any) -> None:
+    """Run a menu action, reporting server errors without crashing.
+
+    A lost connection is re-raised so the application can exit cleanly.
+    """
+    try:
+        handler(gateway)
+    except ConnectionError:
+        raise
+    except ServerError as exc:
+        error(str(exc))
+    except Exception as exc:  # noqa: BLE001 - keep the menu alive
+        error(f"Unexpected error: {exc}")

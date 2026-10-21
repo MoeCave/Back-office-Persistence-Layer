@@ -5,7 +5,9 @@ from typing import List, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.domain.models.fighter_category_registration import FighterCategoryRegistration
+from src.domain.models.fighter_category_registration import (
+    FighterCategoryRegistration,
+)
 from .base_repository import BaseRepository
 
 
@@ -18,7 +20,10 @@ class RegistrationRepository(BaseRepository[FighterCategoryRegistration]):
         self,
         pk: Tuple[int, int, int],
     ) -> Optional[FighterCategoryRegistration]:
-        """Find a registration by its composite PK: (fighter_id, category_id, tournament_id)."""
+        """Find a registration by its composite primary key.
+
+        The key is ``(fighter_id, category_id, tournament_id)``.
+        """
         fighter_id, category_id, tournament_id = pk
         stmt = select(FighterCategoryRegistration).where(
             FighterCategoryRegistration.fighter_id == fighter_id,
@@ -27,14 +32,18 @@ class RegistrationRepository(BaseRepository[FighterCategoryRegistration]):
         )
         return self._session.scalars(stmt).first()
 
-    def get_by_tournament(self, tournament_id: int) -> List[FighterCategoryRegistration]:
+    def get_by_tournament(
+        self, tournament_id: int
+    ) -> List[FighterCategoryRegistration]:
         """Return all registrations for a given tournament."""
         stmt = select(FighterCategoryRegistration).where(
             FighterCategoryRegistration.tournament_id == tournament_id
         )
         return list(self._session.scalars(stmt).all())
 
-    def get_by_fighter(self, fighter_id: int) -> List[FighterCategoryRegistration]:
+    def get_by_fighter(
+        self, fighter_id: int
+    ) -> List[FighterCategoryRegistration]:
         """Return all registrations for a given fighter."""
         stmt = select(FighterCategoryRegistration).where(
             FighterCategoryRegistration.fighter_id == fighter_id

@@ -7,14 +7,14 @@ from rich.theme import Theme
 
 APP_THEME = Theme(
     {
-        "title":   "bold cyan",
-        "header":  "bold white",
+        "title": "bold cyan",
+        "header": "bold white",
         "success": "bold green",
-        "error":   "bold red",
+        "error": "bold red",
         "warning": "bold yellow",
-        "info":    "dim white",
-        "prompt":  "bold magenta",
-        "muted":   "dim",
+        "info": "dim white",
+        "prompt": "bold magenta",
+        "muted": "dim",
         "rel_1_1": "cyan",
         "rel_1_n": "green",
         "rel_n_m": "yellow",

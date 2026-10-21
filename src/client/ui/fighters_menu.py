@@ -12,19 +12,42 @@ from typing import Any
 from rich.table import Table
 
 from src.client.gateway import ServerGateway, ServerError
-from src.ui.console import console
-from src.ui.helpers import (
-    ask, ask_bool, ask_float_optional, ask_int_optional, ask_optional,
-    choose_from_list, empty_table_msg, error, info, make_table,
-    pause, rel_badge, section, success,
+from src.client.ui.console import console
+from src.client.ui.helpers import fighter_label, run_handler
+from src.client.ui.helpers import (
+    ask,
+    ask_bool,
+    ask_float_optional,
+    ask_int_optional,
+    ask_optional,
+    choose_from_list,
+    empty_table_msg,
+    error,
+    info,
+    make_table,
+    pause,
+    rel_badge,
+    section,
+    success,
 )
 
+# ── Table renderers ──────────────────────────────────────────────────────────
 
-# ── Table renderers ────────────────────────────────────────────────────────────
 
-def _fighter_table(fighters: list[dict[str, Any]], title: str = "Fighters") -> Table:
-    t = make_table("ID", "First name", "Last name", "Gender",
-                   "Belt", "Club", "Country", "Email", title=title)
+def _fighter_table(
+    fighters: list[dict[str, Any]], title: str = "Fighters"
+) -> Table:
+    t = make_table(
+        "ID",
+        "First name",
+        "Last name",
+        "Gender",
+        "Belt",
+        "Club",
+        "Country",
+        "Email",
+        title=title,
+    )
     for f in fighters:
         t.add_row(
             str(f.get("fighter_id", "—")),
@@ -41,8 +64,12 @@ def _fighter_table(fighters: list[dict[str, Any]], title: str = "Fighters") -> T
 
 def _registration_table(regs: list[dict[str, Any]]) -> Table:
     t = make_table(
-        "Fighter ID", "Category ID", "Tournament ID",
-        "Weight (kg)", "Approved", "Registered",
+        "Fighter ID",
+        "Category ID",
+        "Tournament ID",
+        "Weight (kg)",
+        "Approved",
+        "Registered",
         title=f"Registrations  {rel_badge('N:M+attrs')}",
     )
     for r in regs:
@@ -57,7 +84,8 @@ def _registration_table(regs: list[dict[str, Any]]) -> Table:
     return t
 
 
-# ── CRUD operations ────────────────────────────────────────────────────────────
+# ── CRUD operations ──────────────────────────────────────────────────────────
+
 
 def _create(gw: ServerGateway) -> None:
     section("Create Fighter")
@@ -77,9 +105,14 @@ def _create(gw: ServerGateway) -> None:
 
     try:
         fighter = gw.fighters.create(
-            first_name=first, last_name=last, gender=gender,
-            belt_level=belt, club_name=club, country=country,
-            email=email, phone=phone,
+            first_name=first,
+            last_name=last,
+            gender=gender,
+            belt_level=belt,
+            club_name=club,
+            country=country,
+            email=email,
+            phone=phone,
             birth_date=birth_str,
         )
         success(
@@ -113,7 +146,9 @@ def _list_paginated(gw: ServerGateway) -> None:
         fighters = gw.fighters.get_paginated(page=page, page_size=page_size)
         if not fighters:
             break
-        console.print(f"[info]  Page {page} — showing {len(fighters)} of {total}[/]")
+        console.print(
+            f"[info]  Page {page} — showing {len(fighters)} of {total}[/]"
+        )
         console.print(_fighter_table(fighters, title=f"Page {page}"))
 
         total_pages = (total + page_size - 1) // page_size
@@ -139,12 +174,19 @@ def _read_by_id(gw: ServerGateway) -> None:
 
     console.print(_fighter_table([fighter], title=f"Fighter #{fid}"))
 
-    # ── 1:1 MedicalRecord ─────────────────────────────────────────────────────
-    console.print(f"\n  Relationship [bold]1:1[/] — MedicalRecord  {rel_badge('1:1')}")
+    # ── 1:1 MedicalRecord ────────────────────────────────────────────────────
+    console.print(
+        f"\n  Relationship [bold]1:1[/] — MedicalRecord  {rel_badge('1:1')}"
+    )
     mr = fighter.get("medical_record")
     if mr:
-        t = make_table("Blood type", "Doctor", "Conditions", "Notes",
-                       title="Medical Record")
+        t = make_table(
+            "Blood type",
+            "Doctor",
+            "Conditions",
+            "Notes",
+            title="Medical Record",
+        )
         t.add_row(
             mr.get("blood_type") or "—",
             mr.get("doctor_name") or "—",
@@ -155,16 +197,21 @@ def _read_by_id(gw: ServerGateway) -> None:
     else:
         info("  No medical record attached.")
 
-    # ── N:M+attrs Registrations ────────────────────────────────────────────────
-    console.print(f"\n  Relationship [bold]N:M with attributes[/]  {rel_badge('N:M+attrs')}")
+    # ── N:M+attrs Registrations ──────────────────────────────────────────────
+    console.print(
+        "\n  Relationship [bold]N:M with attributes[/]  "
+        f"{rel_badge('N:M+attrs')}"
+    )
     regs = fighter.get("registrations", [])
     if regs:
         console.print(_registration_table(regs))
     else:
         info("  No registrations found.")
 
-    # ── 1:N Matches ────────────────────────────────────────────────────────────
-    console.print(f"\n  Relationship [bold]1:N[/] — Matches  {rel_badge('1:N')}")
+    # ── 1:N Matches ──────────────────────────────────────────────────────────
+    console.print(
+        f"\n  Relationship [bold]1:N[/] — Matches  {rel_badge('1:N')}"
+    )
     info(
         f"  Total matches: {fighter.get('total_matches', 0)}   "
         f"Wins: {fighter.get('total_wins', 0)}"
@@ -211,7 +258,7 @@ def _update(gw: ServerGateway) -> None:
     )
 
     try:
-        updated = gw.fighters.update(
+        gw.fighters.update(
             fid,
             first_name=new_first or fighter["first_name"],
             last_name=new_last or fighter["last_name"],
@@ -237,7 +284,8 @@ def _delete(gw: ServerGateway) -> None:
         return
 
     if not ask_bool(
-        f"Delete {fighter['first_name']} {fighter['last_name']} and ALL their records?",
+        f"Delete {fighter['first_name']} {fighter['last_name']} "
+        "and ALL their records?",
         default=False,
     ):
         info("Cancelled.")
@@ -250,7 +298,8 @@ def _delete(gw: ServerGateway) -> None:
         error(str(exc))
 
 
-# ── Search operations ──────────────────────────────────────────────────────────
+# ── Search operations ────────────────────────────────────────────────────────
+
 
 def _search_by_last_name(gw: ServerGateway) -> None:
     section("Search by Last Name")
@@ -292,11 +341,15 @@ def _search_by_email(gw: ServerGateway) -> None:
         console.print(_fighter_table([fighter], title="Result"))
 
 
-# ── 1:1 MedicalRecord management ──────────────────────────────────────────────
+# ── 1:1 MedicalRecord management ─────────────────────────────────────────────
+
 
 def _manage_medical_record(gw: ServerGateway) -> None:
     section(f"Medical Record  {rel_badge('1:1')}")
-    info("  Relationship type: 1:1 — each fighter has at most one medical record.")
+    info(
+        "  Relationship type: 1:1 — each fighter has at most one "
+        "medical record."
+    )
 
     fid = ask_int_optional("Fighter ID")
     if fid is None:
@@ -311,22 +364,34 @@ def _manage_medical_record(gw: ServerGateway) -> None:
 
     if mr:
         console.print("[info]  Existing record found — you can update it.[/]")
-        blood = ask(
-            f"Blood type [{mr.get('blood_type') or ''}]",
-            default=mr.get("blood_type") or "",
-        ) or None
-        doctor = ask(
-            f"Doctor [{mr.get('doctor_name') or ''}]",
-            default=mr.get("doctor_name") or "",
-        ) or None
-        conds = ask(
-            f"Conditions [{mr.get('conditions') or ''}]",
-            default=mr.get("conditions") or "",
-        ) or None
-        notes = ask(
-            f"Notes [{mr.get('notes') or ''}]",
-            default=mr.get("notes") or "",
-        ) or None
+        blood = (
+            ask(
+                f"Blood type [{mr.get('blood_type') or ''}]",
+                default=mr.get("blood_type") or "",
+            )
+            or None
+        )
+        doctor = (
+            ask(
+                f"Doctor [{mr.get('doctor_name') or ''}]",
+                default=mr.get("doctor_name") or "",
+            )
+            or None
+        )
+        conds = (
+            ask(
+                f"Conditions [{mr.get('conditions') or ''}]",
+                default=mr.get("conditions") or "",
+            )
+            or None
+        )
+        notes = (
+            ask(
+                f"Notes [{mr.get('notes') or ''}]",
+                default=mr.get("notes") or "",
+            )
+            or None
+        )
     else:
         info("  No medical record — creating one.")
         blood = ask_optional("Blood type")
@@ -347,16 +412,22 @@ def _manage_medical_record(gw: ServerGateway) -> None:
         error(str(exc))
 
 
-# ── N:M+attrs Registration management ─────────────────────────────────────────
+# ── N:M+attrs Registration management ────────────────────────────────────────
+
 
 def _manage_registration(gw: ServerGateway) -> None:
-    section(f"Register Fighter in Category/Tournament  {rel_badge('N:M+attrs')}")
-    info("  Relationship type: N:M with attributes — fighter ↔ category ↔ tournament.")
+    section(
+        f"Register Fighter in Category/Tournament  {rel_badge('N:M+attrs')}"
+    )
+    info(
+        "  Relationship type: N:M with attributes — "
+        "fighter ↔ category ↔ tournament."
+    )
 
     fighters = gw.fighters.list_all()
     fighter = choose_from_list(
         fighters,
-        lambda f: f"{f['first_name']} {f['last_name']} (belt: {f.get('belt_level') or '?'})",
+        fighter_label,
         "Select Fighter",
     )
     if fighter is None:
@@ -388,7 +459,11 @@ def _manage_registration(gw: ServerGateway) -> None:
         return
 
     existing = gw.registrations.get(
-        (fighter["fighter_id"], category["category_id"], tournament["tournament_id"])
+        (
+            fighter["fighter_id"],
+            category["category_id"],
+            tournament["tournament_id"],
+        )
     )
     if existing:
         info(f"  Already registered — approved: {existing.get('is_approved')}")
@@ -406,15 +481,18 @@ def _manage_registration(gw: ServerGateway) -> None:
 
     weight = ask_float_optional("Weigh-in weight (kg)")
     try:
-        gw.registrations.add({
-            "fighter_id": fighter["fighter_id"],
-            "category_id": category["category_id"],
-            "tournament_id": tournament["tournament_id"],
-            "weight_in_weight_kg": weight,
-            "is_approved": False,
-        })
+        gw.registrations.add(
+            {
+                "fighter_id": fighter["fighter_id"],
+                "category_id": category["category_id"],
+                "tournament_id": tournament["tournament_id"],
+                "weight_in_weight_kg": weight,
+                "is_approved": False,
+            }
+        )
         success(
-            f"Fighter '{fighter['first_name']} {fighter['last_name']}' registered in "
+            f"Fighter '{fighter['first_name']} {fighter['last_name']}' "
+            "registered in "
             f"'{category['name']}' at '{tournament['name']}'."
         )
     except (ServerError, ValueError) as exc:
@@ -450,22 +528,28 @@ def _approve_registration(gw: ServerGateway) -> None:
         error(str(exc))
 
 
-# ── Submenu ────────────────────────────────────────────────────────────────────
+# ── Submenu ──────────────────────────────────────────────────────────────────
 
 _MENU_ITEMS = [
-    ("List all fighters",                       _list_all),
-    ("List fighters (paginated)",               _list_paginated),
-    ("Get fighter by ID (+ relationships)",     _read_by_id),
-    ("Create fighter",                          _create),
-    ("Update fighter",                          _update),
-    ("Delete fighter",                          _delete),
-    ("Search by last name",                     _search_by_last_name),
-    ("Filter by belt level",                    _search_by_belt),
-    ("Filter by country",                       _search_by_country),
-    ("Search by email",                         _search_by_email),
-    (f"Manage medical record  [rel_1_1](1:1)[/]",              _manage_medical_record),
-    (f"Register in category/tournament  [rel_n_m_attr](N:M+attrs)[/]", _manage_registration),
-    (f"Approve registration  [rel_n_m_attr](N:M+attrs)[/]",            _approve_registration),
+    ("List all fighters", _list_all),
+    ("List fighters (paginated)", _list_paginated),
+    ("Get fighter by ID (+ relationships)", _read_by_id),
+    ("Create fighter", _create),
+    ("Update fighter", _update),
+    ("Delete fighter", _delete),
+    ("Search by last name", _search_by_last_name),
+    ("Filter by belt level", _search_by_belt),
+    ("Filter by country", _search_by_country),
+    ("Search by email", _search_by_email),
+    ("Manage medical record  [rel_1_1](1:1)[/]", _manage_medical_record),
+    (
+        "Register in category/tournament  [rel_n_m_attr](N:M+attrs)[/]",
+        _manage_registration,
+    ),
+    (
+        "Approve registration  [rel_n_m_attr](N:M+attrs)[/]",
+        _approve_registration,
+    ),
 ]
 
 
@@ -475,7 +559,7 @@ def fighters_menu(gw: ServerGateway) -> None:
         section("Fighters")
         for i, (label, _) in enumerate(_MENU_ITEMS, start=1):
             console.print(f"  [muted]{i:>2}.[/] {label}")
-        console.print(f"  [muted] 0.[/] Back to main menu")
+        console.print("  [muted] 0.[/] Back to main menu")
 
         choice = ask_int_optional("Choose an option")
         if choice is None or choice == 0:
@@ -485,9 +569,6 @@ def fighters_menu(gw: ServerGateway) -> None:
             continue
 
         _, handler = _MENU_ITEMS[choice - 1]
-        try:
-            handler(gw)
-        except Exception as exc:
-            error(f"Unexpected error: {exc}")
+        run_handler(handler, gw)
 
         pause()

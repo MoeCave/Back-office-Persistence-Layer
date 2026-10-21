@@ -17,11 +17,17 @@ class MedicalRecord(Base):
 
     __tablename__ = "medical_record"
 
-    medical_record_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    blood_type: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    medical_record_id: Mapped[int] = mapped_column(
+        primary_key=True, autoincrement=True
+    )
+    blood_type: Mapped[Optional[str]] = mapped_column(
+        String(10), nullable=True
+    )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     conditions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    doctor_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    doctor_name: Mapped[Optional[str]] = mapped_column(
+        String(200), nullable=True
+    )
 
     fighter_id: Mapped[int] = mapped_column(
         ForeignKey("fighter.fighter_id", ondelete="CASCADE"),
@@ -32,7 +38,7 @@ class MedicalRecord(Base):
         DateTime, nullable=True, onupdate=func.now()
     )
 
-    # ── Relationships ──────────────────────────────────────────────────────────
+    # ── Relationships ────────────────────────────────────────────────────────
     fighter: Mapped["Fighter"] = relationship(
         "Fighter", back_populates="medical_record"
     )

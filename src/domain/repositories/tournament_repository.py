@@ -1,4 +1,4 @@
-"""TournamentRepository — domain operations for the Tournament aggregate root."""
+"""TournamentRepository — domain operations for Tournament."""
 
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -16,16 +16,18 @@ class TournamentRepository(BaseRepository[Tournament]):
     def __init__(self, session: Session) -> None:
         super().__init__(session, Tournament)
 
-    # ── Specific queries ───────────────────────────────────────────────────────
+    # ── Specific queries ─────────────────────────────────────────────────────
 
     def get_by_name(self, name: str) -> List[Tournament]:
-        """Return tournaments whose name contains the string (case-insensitive)."""
+        """Return tournaments whose name contains the string (any case)."""
         stmt = select(Tournament).where(Tournament.name.ilike(f"%{name}%"))
         return list(self._session.scalars(stmt).all())
 
     def get_by_location(self, location: str) -> List[Tournament]:
-        """Return tournaments at the given location (case-insensitive partial match)."""
-        stmt = select(Tournament).where(Tournament.location.ilike(f"%{location}%"))
+        """Return tournaments whose location contains the string (any case)."""
+        stmt = select(Tournament).where(
+            Tournament.location.ilike(f"%{location}%")
+        )
         return list(self._session.scalars(stmt).all())
 
     def get_active_tournaments(self) -> List[Tournament]:
@@ -37,7 +39,7 @@ class TournamentRepository(BaseRepository[Tournament]):
         return list(self._session.scalars(stmt).all())
 
     def get_upcoming(self) -> List[Tournament]:
-        """Return tournaments that have not started yet, ordered by start date."""
+        """Return tournaments not started yet, ordered by start date."""
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         stmt = (
             select(Tournament)
@@ -46,7 +48,7 @@ class TournamentRepository(BaseRepository[Tournament]):
         )
         return list(self._session.scalars(stmt).all())
 
-    # ── Domain operations ─────────────────────────────────────────────────────
+    # ── Domain operations ────────────────────────────────────────────────────
 
     def add_tatami_to_tournament(
         self,

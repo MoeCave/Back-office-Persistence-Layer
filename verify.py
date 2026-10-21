@@ -1,66 +1,94 @@
-"""
-verify.py — Quick sanity-check for the full project setup.
+"""verify.py - quick sanity check for the whole project setup.
 
-Imports all modules and verifies the schema can be created in an
-in-memory SQLite database. No external services required.
+Imports every layer, verifies the schema can be created in an in-memory
+SQLite database and checks that the client never loads SQLAlchemy.
+No external services are required.
 
 Usage:
     python verify.py
 """
 
-import sys
 import os
-
-sys.path.insert(0, os.path.dirname(__file__))
+import subprocess
+import sys
 
 os.environ["APP_ENV"] = "test"
 os.environ["DATABASE_URL_TEST"] = "sqlite:///:memory:"
 
 print("Checking imports...")
 
-# Config and DB layer (must be inside src/)
-from src.domain.config import ENVIRONMENT, DB_URL, get_database_url  # noqa: F401
-from src.domain.db import Base, engine, Session  # noqa: F401
-print(f"  ✅  Config loaded — ENVIRONMENT='{ENVIRONMENT}'")
-print(f"  ✅  Engine: {engine}")
+from sqlalchemy import inspect as sa_inspect  # noqa: E402
 
-# Models
-from src.domain.models import (  # noqa: F401
-    Fighter, MedicalRecord, Tournament, Tatami,
-    Category, FighterCategoryRegistration, Match,
+from src.domain.config import ENVIRONMENT  # noqa: E402
+from src.domain.db import Base, engine  # noqa: E402
+from src.domain.models import (  # noqa: E402
+    Category,
+    Fighter,
+    FighterCategoryRegistration,
+    Match,
+    MedicalRecord,
+    Tatami,
+    Tournament,
 )
-print("  ✅  All ORM models imported")
-
-# Repositories
-from src.domain.repositories import (  # noqa: F401
-    FighterRepository, TournamentRepository, CategoryRepository,
-    MatchRepository, RegistrationRepository, UnitOfWork,
+from src.domain.models.base import Base as ModelsBase  # noqa: E402
+from src.domain.repositories import (  # noqa: E402,F401
+    CategoryRepository,
+    FighterRepository,
+    MatchRepository,
+    RegistrationRepository,
+    TournamentRepository,
+    UnitOfWork,
 )
-print("  ✅  All repositories imported")
+from src.server.router import Router  # noqa: E402,F401
+from src.server.routes import ROUTES  # noqa: E402
 
-# Create schema
+print(f"  OK  Config loaded - ENVIRONMENT='{ENVIRONMENT}'")
+print(f"  OK  Engine: {engine}")
+print("  OK  Models, repositories, services and router imported")
+
 Base.metadata.create_all(engine)
-from sqlalchemy import inspect as sa_inspect
-insp = sa_inspect(engine)
-tables = set(insp.get_table_names())
-expected = {"fighter", "medical_record", "tournament", "tatami",
-            "category", "fighter_category_registration", "match"}
+tables = set(sa_inspect(engine).get_table_names())
+expected = {
+    "fighter",
+    "medical_record",
+    "tournament",
+    "tatami",
+    "category",
+    "fighter_category_registration",
+    "match",
+}
 missing = expected - tables
 assert not missing, f"Missing tables: {missing}"
-print(f"  ✅  Schema created — {len(tables)} tables: {sorted(tables)}")
+print(f"  OK  Schema created - {len(tables)} tables: {sorted(tables)}")
 
-# Verify last_update on all models
-for cls in [Fighter, MedicalRecord, Tournament, Tatami,
-            Category, FighterCategoryRegistration, Match]:
-    mapper = sa_inspect(cls)
-    col_names = [c.key for c in mapper.columns]
-    assert "last_update" in col_names, f"last_update missing in {cls.__name__}"
-print("  ✅  last_update column declared on all ORM models")
+for model in (
+    Fighter,
+    MedicalRecord,
+    Tournament,
+    Tatami,
+    Category,
+    FighterCategoryRegistration,
+    Match,
+):
+    columns = [column.key for column in sa_inspect(model).columns]
+    assert "last_update" in columns, f"last_update missing in {model.__name__}"
+print("  OK  last_update column declared on all ORM models")
 
-# Verify Base metadata is shared (single source of truth)
-assert Base.metadata is engine.dialect.__class__.__mro__[0].__module__ or True
-from src.domain.models.base import Base as ModelsBase
-assert ModelsBase is Base, "Base in models/base.py must be the same object as src.domain.db.Base"
-print("  ✅  Base metadata is the same object in db.py and models/")
+assert ModelsBase is Base, "models/base.py must re-export db.Base"
+print("  OK  Base metadata is shared by db.py and models/")
 
-print("\n🏆  All checks passed — project is correctly structured.")
+routes = sum(len(actions) for actions in ROUTES.values())
+print(f"  OK  Routing table: {len(ROUTES)} resources, {routes} actions")
+
+# The client must work without any ORM / persistence code loaded.
+probe = (
+    "import sys; import src.client.gateway, src.client.ui.main_menu;"
+    "bad = [m for m in sys.modules if m.split('.')[0] == 'sqlalchemy'"
+    " or m.startswith(('src.domain', 'src.server'))];"
+    "sys.exit(1 if bad else 0)"
+)
+result = subprocess.run([sys.executable, "-c", probe], check=False)
+assert result.returncode == 0, "Client imports persistence/server code!"
+print("  OK  Client does not import SQLAlchemy, domain or server code")
+
+print("\nAll checks passed - project is correctly structured.")

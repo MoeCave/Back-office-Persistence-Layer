@@ -20,17 +20,24 @@ class Match(Base):
     __tablename__ = "match"
 
     match_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    scheduled_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    scheduled_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
     round_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    win_method: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    duration_seconds: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
+    win_method: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
     last_update: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, onupdate=func.now()
     )
 
-    # ── Foreign Keys ──────────────────────────────────────────────────────────
+    # ── Foreign Keys ─────────────────────────────────────────────────────────
     tournament_id: Mapped[int] = mapped_column(
-        ForeignKey("tournament.tournament_id", ondelete="CASCADE"), nullable=False
+        ForeignKey("tournament.tournament_id", ondelete="CASCADE"),
+        nullable=False,
     )
     category_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("category.category_id", ondelete="SET NULL"), nullable=True
@@ -45,7 +52,7 @@ class Match(Base):
         ForeignKey("fighter.fighter_id", ondelete="SET NULL"), nullable=True
     )
 
-    # ── Relationships ──────────────────────────────────────────────────────────
+    # ── Relationships ────────────────────────────────────────────────────────
     tournament: Mapped["Tournament"] = relationship(
         "Tournament", back_populates="matches"
     )

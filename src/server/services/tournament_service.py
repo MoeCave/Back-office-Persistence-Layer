@@ -1,172 +1,165 @@
-"""
-services/tournament_service.py — business operations for the Tournament domain.
-"""
+"""Business operations for the Tournament domain."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-from src.domain.models import Tournament, Tatami
-from src.domain.repositories import UnitOfWork
-from src.server.dto import TournamentDTO, TatamiDTO
+from src.domain.models import Tournament
+from src.server.converters import (
+    tatami_to_dto,
+    to_dicts,
+    tournament_to_dto,
+)
+from src.server.errors import NotFoundError, ValidationError
+from src.server.services.base import BaseService
+from src.server.validation import (
+    clean_str,
+    optional_int,
+    optional_number,
+    parse_datetime,
+)
 
 
-class TournamentService:
-    """Stateless service; each method opens its own UnitOfWork."""
+class TournamentService(BaseService):
+    """CRUD, searches and tatami management for tournaments."""
 
-    def __init__(self, session_factory) -> None:
-        self._session_factory = session_factory
-
-    # ── CRUD ───────────────────────────────────────────────────────────────────
+    # -- CRUD ----------------------------------------------------------
 
     def list_all(self) -> list[dict[str, Any]]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            return [self._to_dto(t).to_dict() for t in uow.tournaments.get_all()]
+        with self._uow() as uow:
+            return to_dicts(uow.tournaments.get_all(), tournament_to_dto)
 
     def get_by_id(self, tournament_id: int) -> dict[str, Any] | None:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            t = uow.tournaments.get(tournament_id)
-            if t is None:
+        with self._uow() as uow:
+            tournament = uow.tournaments.get(tournament_id)
+            if tournament is None:
                 return None
-            result = self._to_dto(t).to_dict()
-            result["tatamis"] = [self._tatami_to_dto(ta).to_dict() for ta in t.tatamis]
-            matches = uow.matches.get_by_tournament(tournament_id)
-            regs = uow.registrations.get_by_tournament(tournament_id)
-            result["total_matches"] = len(matches)
-            result["total_registrations"] = len(regs)
+            result = tournament_to_dto(tournament).to_dict()
+            result["tatamis"] = to_dicts(tournament.tatamis, tatami_to_dto)
+            registrations = uow.registrations.get_by_tournament(tournament_id)
+            result["total_matches"] = len(
+                uow.matches.get_by_tournament(tournament_id)
+            )
+            result["total_registrations"] = len(registrations)
             result["pending_registrations"] = sum(
-                1 for r in regs if not r.is_approved
+                1 for reg in registrations if not reg.is_approved
             )
             return result
 
     def create(self, payload: dict[str, Any]) -> dict[str, Any]:
-        name = payload.get("name", "").strip()
+        name = clean_str(payload.get("name"))
         if not name:
-            raise ValueError("name is required.")
-        start_date = self._parse_date(payload.get("start_date"))
-        end_date = self._parse_date(payload.get("end_date"))
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            t = Tournament(
+            raise ValidationError("name is required.")
+        start_date = parse_datetime(payload.get("start_date"), "start_date")
+        end_date = parse_datetime(payload.get("end_date"), "end_date")
+        self._check_date_order(start_date, end_date)
+        max_fighters = optional_int(payload, "max_fighters")
+        with self._uow() as uow:
+            tournament = Tournament(
                 name=name,
                 location=payload.get("location"),
                 start_date=start_date,
                 end_date=end_date,
-                max_fighters=payload.get("max_fighters"),
+                max_fighters=max_fighters,
             )
-            uow.tournaments.add(t)
+            uow.tournaments.add(tournament)
             uow.commit()
-            return self._to_dto(t).to_dict()
+            return tournament_to_dto(tournament).to_dict()
 
-    def update(self, tournament_id: int, payload: dict[str, Any]) -> dict[str, Any]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            t = uow.tournaments.get(tournament_id)
-            if t is None:
-                raise ValueError(f"Tournament with id={tournament_id} not found.")
-            if "name" in payload and payload["name"]:
-                t.name = payload["name"]
+    def update(
+        self, tournament_id: int, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        start_date = parse_datetime(payload.get("start_date"), "start_date")
+        end_date = parse_datetime(payload.get("end_date"), "end_date")
+        max_fighters = optional_int(payload, "max_fighters")
+        with self._uow() as uow:
+            tournament = self._get_or_raise(uow, tournament_id)
+            name = clean_str(payload.get("name"))
+            if name:
+                tournament.name = name
             if "location" in payload:
-                t.location = payload["location"] or None
+                tournament.location = payload["location"] or None
             if "max_fighters" in payload:
-                t.max_fighters = payload["max_fighters"]
-            uow.tournaments.update(t)
+                tournament.max_fighters = max_fighters
+            if "start_date" in payload:
+                tournament.start_date = start_date
+            if "end_date" in payload:
+                tournament.end_date = end_date
+            self._check_date_order(tournament.start_date, tournament.end_date)
+            uow.tournaments.update(tournament)
             uow.commit()
-            return self._to_dto(t).to_dict()
+            return tournament_to_dto(tournament).to_dict()
 
     def delete(self, tournament_id: int) -> None:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            t = uow.tournaments.get(tournament_id)
-            if t is None:
-                raise ValueError(f"Tournament with id={tournament_id} not found.")
-            uow.tournaments.delete(t)
+        with self._uow() as uow:
+            tournament = self._get_or_raise(uow, tournament_id)
+            uow.tournaments.delete(tournament)
             uow.commit()
 
-    # ── Searches ───────────────────────────────────────────────────────────────
+    # -- Searches ------------------------------------------------------
 
     def search_by_name(self, name: str) -> list[dict[str, Any]]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            return [
-                self._to_dto(t).to_dict()
-                for t in uow.tournaments.get_by_name(name)
-            ]
+        with self._uow() as uow:
+            found = uow.tournaments.get_by_name(name)
+            return to_dicts(found, tournament_to_dto)
 
     def search_by_location(self, location: str) -> list[dict[str, Any]]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            return [
-                self._to_dto(t).to_dict()
-                for t in uow.tournaments.get_by_location(location)
-            ]
+        with self._uow() as uow:
+            found = uow.tournaments.get_by_location(location)
+            return to_dicts(found, tournament_to_dto)
 
     def list_active(self) -> list[dict[str, Any]]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            return [
-                self._to_dto(t).to_dict()
-                for t in uow.tournaments.get_active_tournaments()
-            ]
+        with self._uow() as uow:
+            found = uow.tournaments.get_active_tournaments()
+            return to_dicts(found, tournament_to_dto)
 
     def list_upcoming(self) -> list[dict[str, Any]]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            return [
-                self._to_dto(t).to_dict()
-                for t in uow.tournaments.get_upcoming()
-            ]
+        with self._uow() as uow:
+            found = uow.tournaments.get_upcoming()
+            return to_dicts(found, tournament_to_dto)
 
-    # ── Tatami management ──────────────────────────────────────────────────────
+    # -- Tatami management ---------------------------------------------
 
     def add_tatami(
         self, tournament_id: int, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        name = payload.get("name", "").strip()
+        name = clean_str(payload.get("name"))
         if not name:
-            raise ValueError("Tatami name is required.")
-        with UnitOfWork(session_factory=self._session_factory) as uow:
+            raise ValidationError("Tatami name is required.")
+        mat_number = optional_int(payload, "mat_number")
+        area_size = optional_number(payload, "area_size")
+        with self._uow() as uow:
+            self._get_or_raise(uow, tournament_id)
             tatami = uow.tournaments.add_tatami_to_tournament(
                 tournament_id=tournament_id,
                 name=name,
-                mat_number=payload.get("mat_number"),
-                area_size=payload.get("area_size"),
-                is_active=payload.get("is_active", True),
+                mat_number=mat_number,
+                area_size=area_size,
+                is_active=bool(payload.get("is_active", True)),
             )
             uow.commit()
-            return self._tatami_to_dto(tatami).to_dict()
+            return tatami_to_dto(tatami).to_dict()
 
     def list_tatamis(self, tournament_id: int) -> list[dict[str, Any]]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            t = uow.tournaments.get(tournament_id)
-            if t is None:
-                raise ValueError(f"Tournament with id={tournament_id} not found.")
-            return [self._tatami_to_dto(ta).to_dict() for ta in t.tatamis]
+        with self._uow() as uow:
+            tournament = self._get_or_raise(uow, tournament_id)
+            return to_dicts(tournament.tatamis, tatami_to_dto)
 
-    # ── Converters ─────────────────────────────────────────────────────────────
+    # -- Internals -----------------------------------------------------
 
     @staticmethod
-    def _to_dto(t: Tournament) -> TournamentDTO:
-        return TournamentDTO(
-            tournament_id=t.tournament_id,
-            name=t.name,
-            location=t.location,
-            start_date=t.start_date.isoformat() if t.start_date else None,
-            end_date=t.end_date.isoformat() if t.end_date else None,
-            max_fighters=t.max_fighters,
-            created_at=t.created_at.isoformat() if t.created_at else None,
-        )
+    def _get_or_raise(uow, tournament_id: int) -> Tournament:
+        tournament = uow.tournaments.get(tournament_id)
+        if tournament is None:
+            raise NotFoundError(
+                f"Tournament with id={tournament_id} not found."
+            )
+        return tournament
 
     @staticmethod
-    def _tatami_to_dto(ta: Tatami) -> TatamiDTO:
-        return TatamiDTO(
-            tatami_id=ta.tatami_id,
-            tournament_id=ta.tournament_id,
-            name=ta.name,
-            mat_number=ta.mat_number,
-            area_size=ta.area_size,
-            is_active=ta.is_active,
-        )
-
-    @staticmethod
-    def _parse_date(value: str | None) -> datetime | None:
-        if not value:
-            return None
-        try:
-            return datetime.strptime(value, "%Y-%m-%d")
-        except (ValueError, TypeError):
-            return None
+    def _check_date_order(
+        start: datetime | None, end: datetime | None
+    ) -> None:
+        if start and end and end < start:
+            raise ValidationError("end_date must not be before start_date.")

@@ -1,5 +1,4 @@
-"""
-server.py — runnable TCP server entry point.
+"""Runnable TCP server entry point.
 
 Usage:
     python server.py
@@ -10,16 +9,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
-import os
 
-sys.path.insert(0, os.path.dirname(__file__))
-
-from src.domain.db import Session, engine, Base
-from src.server.app import run_server, DEFAULT_HOST, DEFAULT_PORT
+from src.common.protocol import DEFAULT_HOST, DEFAULT_PORT
+from src.domain.db import Base, Session, engine
+from src.server.app import DEFAULT_CLIENT_TIMEOUT, run_server
 
 
 def _ensure_schema() -> None:
+    """Create the tables if they do not exist yet."""
     Base.metadata.create_all(engine)
 
 
@@ -28,12 +27,27 @@ def main() -> None:
         description="Tournament Back-Office TCP Server"
     )
     parser.add_argument("--host", default=DEFAULT_HOST, help="Bind address")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port")
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help="Bind port"
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_CLIENT_TIMEOUT,
+        help="Seconds of client inactivity before dropping it (0 = never)",
+    )
+    parser.add_argument("--debug", action="store_true", help="Log requests")
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format="%(asctime)s [SERVER] %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     try:
         _ensure_schema()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - report any startup failure
         print(f"[ERROR] Could not connect to database: {exc}", file=sys.stderr)
         print(
             "[INFO]  Make sure Docker is running or set APP_ENV=test",
@@ -41,7 +55,12 @@ def main() -> None:
         )
         sys.exit(1)
 
-    run_server(host=args.host, port=args.port, session_factory=Session)
+    run_server(
+        host=args.host,
+        port=args.port,
+        session_factory=Session,
+        client_timeout=args.timeout or None,
+    )
 
 
 if __name__ == "__main__":

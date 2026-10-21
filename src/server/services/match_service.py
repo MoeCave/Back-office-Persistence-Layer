@@ -1,159 +1,137 @@
-"""
-services/match_service.py — business operations for the Match domain.
-"""
+"""Business operations for the Match domain."""
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from src.domain.models import Match
-from src.domain.repositories import UnitOfWork
-from src.server.dto import MatchDTO
+from src.server.converters import match_to_dto, to_dicts
+from src.server.errors import NotFoundError, ValidationError
+from src.server.services.base import BaseService
+from src.server.validation import (
+    optional_int,
+    optional_number,
+    parse_datetime,
+)
+
+_ROLES = (
+    ("blue", "blue_fighter_id"),
+    ("red", "red_fighter_id"),
+    ("winner", "winner_id"),
+)
 
 
-class MatchService:
-    """Stateless service; each method opens its own UnitOfWork."""
+class MatchService(BaseService):
+    """CRUD and searches for matches."""
 
-    def __init__(self, session_factory) -> None:
-        self._session_factory = session_factory
-
-    # ── CRUD ───────────────────────────────────────────────────────────────────
+    # -- CRUD ----------------------------------------------------------
 
     def list_all(self) -> list[dict[str, Any]]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            return [self._to_dto(m).to_dict() for m in uow.matches.get_all()]
+        with self._uow() as uow:
+            return to_dicts(uow.matches.get_all(), match_to_dto)
 
     def get_by_id(self, match_id: int) -> dict[str, Any] | None:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            m = uow.matches.get(match_id)
-            if m is None:
+        with self._uow() as uow:
+            match = uow.matches.get(match_id)
+            if match is None:
                 return None
-            result = self._to_dto(m).to_dict()
-            # Enrich with fighter names for display
-            fighters_info = {}
-            for role, fid in [
-                ("blue", m.blue_fighter_id),
-                ("red", m.red_fighter_id),
-                ("winner", m.winner_id),
-            ]:
-                if fid:
-                    f = uow.fighters.get(fid)
-                    fighters_info[role] = (
-                        f"{f.first_name} {f.last_name}" if f else "?"
-                    )
-                else:
-                    fighters_info[role] = None
-            result["fighters_info"] = fighters_info
+            result = match_to_dto(match).to_dict()
+            result["fighters_info"] = {
+                role: self._fighter_name(uow, getattr(match, attr))
+                for role, attr in _ROLES
+            }
             return result
 
     def create(self, payload: dict[str, Any]) -> dict[str, Any]:
-        tournament_id = payload.get("tournament_id")
+        tournament_id = optional_int(payload, "tournament_id")
         if not tournament_id:
-            raise ValueError("tournament_id is required.")
-
-        scheduled_time = None
-        if payload.get("scheduled_time"):
-            try:
-                scheduled_time = datetime.strptime(
-                    payload["scheduled_time"], "%Y-%m-%d %H:%M"
-                )
-            except ValueError:
-                pass
-
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            m = Match(
+            raise ValidationError("tournament_id is required.")
+        with self._uow() as uow:
+            match = Match(
                 tournament_id=tournament_id,
-                category_id=payload.get("category_id"),
-                blue_fighter_id=payload.get("blue_fighter_id"),
-                red_fighter_id=payload.get("red_fighter_id"),
-                winner_id=payload.get("winner_id"),
-                round_number=payload.get("round_number"),
-                duration_seconds=payload.get("duration_seconds"),
+                category_id=optional_int(payload, "category_id"),
+                blue_fighter_id=optional_int(payload, "blue_fighter_id"),
+                red_fighter_id=optional_int(payload, "red_fighter_id"),
+                winner_id=optional_int(payload, "winner_id"),
+                round_number=optional_int(payload, "round_number"),
+                duration_seconds=optional_number(payload, "duration_seconds"),
                 win_method=payload.get("win_method"),
-                scheduled_time=scheduled_time,
+                scheduled_time=parse_datetime(
+                    payload.get("scheduled_time"), "scheduled_time"
+                ),
             )
-            uow.matches.add(m)
+            uow.matches.add(match)
             uow.commit()
-            return self._to_dto(m).to_dict()
+            return match_to_dto(match).to_dict()
 
     def update(self, match_id: int, payload: dict[str, Any]) -> dict[str, Any]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            m = uow.matches.get(match_id)
-            if m is None:
-                raise ValueError(f"Match with id={match_id} not found.")
+        winner_id = optional_int(payload, "winner_id")
+        duration = optional_number(payload, "duration_seconds")
+        with self._uow() as uow:
+            match = self._get_or_raise(uow, match_id)
             if "winner_id" in payload:
-                m.winner_id = payload["winner_id"]
+                match.winner_id = winner_id
             if "win_method" in payload:
-                m.win_method = payload["win_method"] or None
+                match.win_method = payload["win_method"] or None
             if "duration_seconds" in payload:
-                m.duration_seconds = payload["duration_seconds"]
-            uow.matches.update(m)
+                match.duration_seconds = duration
+            uow.matches.update(match)
             uow.commit()
-            return self._to_dto(m).to_dict()
+            return match_to_dto(match).to_dict()
 
     def delete(self, match_id: int) -> None:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            m = uow.matches.get(match_id)
-            if m is None:
-                raise ValueError(f"Match with id={match_id} not found.")
-            uow.matches.delete(m)
+        with self._uow() as uow:
+            match = self._get_or_raise(uow, match_id)
+            uow.matches.delete(match)
             uow.commit()
 
-    # ── Searches ───────────────────────────────────────────────────────────────
+    # -- Searches ------------------------------------------------------
 
     def get_by_tournament(self, tournament_id: int) -> list[dict[str, Any]]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            return [
-                self._to_dto(m).to_dict()
-                for m in uow.matches.get_by_tournament(tournament_id)
-            ]
+        with self._uow() as uow:
+            found = uow.matches.get_by_tournament(tournament_id)
+            return to_dicts(found, match_to_dto)
 
     def get_by_fighter(self, fighter_id: int) -> dict[str, Any]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            all_matches = uow.matches.get_by_fighter(fighter_id)
-            wins = uow.matches.get_wins_by_fighter(fighter_id)
+        with self._uow() as uow:
             return {
-                "matches": [self._to_dto(m).to_dict() for m in all_matches],
-                "total_wins": len(wins),
+                "matches": to_dicts(
+                    uow.matches.get_by_fighter(fighter_id), match_to_dto
+                ),
+                "total_wins": len(uow.matches.get_wins_by_fighter(fighter_id)),
             }
 
     def get_by_category(self, category_id: int) -> list[dict[str, Any]]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            return [
-                self._to_dto(m).to_dict()
-                for m in uow.matches.get_by_category(category_id)
-            ]
+        with self._uow() as uow:
+            found = uow.matches.get_by_category(category_id)
+            return to_dicts(found, match_to_dto)
 
     def get_by_round(
         self, tournament_id: int, round_number: int
     ) -> list[dict[str, Any]]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            return [
-                self._to_dto(m).to_dict()
-                for m in uow.matches.get_by_round(tournament_id, round_number)
-            ]
+        with self._uow() as uow:
+            found = uow.matches.get_by_round(tournament_id, round_number)
+            return to_dicts(found, match_to_dto)
 
     def get_wins_by_fighter(self, fighter_id: int) -> list[dict[str, Any]]:
-        with UnitOfWork(session_factory=self._session_factory) as uow:
-            return [
-                self._to_dto(m).to_dict()
-                for m in uow.matches.get_wins_by_fighter(fighter_id)
-            ]
+        with self._uow() as uow:
+            found = uow.matches.get_wins_by_fighter(fighter_id)
+            return to_dicts(found, match_to_dto)
 
-    # ── Converters ─────────────────────────────────────────────────────────────
+    # -- Internals -----------------------------------------------------
 
     @staticmethod
-    def _to_dto(m: Match) -> MatchDTO:
-        return MatchDTO(
-            match_id=m.match_id,
-            tournament_id=m.tournament_id,
-            category_id=m.category_id,
-            blue_fighter_id=m.blue_fighter_id,
-            red_fighter_id=m.red_fighter_id,
-            winner_id=m.winner_id,
-            round_number=m.round_number,
-            duration_seconds=m.duration_seconds,
-            win_method=m.win_method,
-            scheduled_time=m.scheduled_time.isoformat() if m.scheduled_time else None,
-        )
+    def _get_or_raise(uow, match_id: int) -> Match:
+        match = uow.matches.get(match_id)
+        if match is None:
+            raise NotFoundError(f"Match with id={match_id} not found.")
+        return match
+
+    @staticmethod
+    def _fighter_name(uow, fighter_id: int | None) -> str | None:
+        if not fighter_id:
+            return None
+        fighter = uow.fighters.get(fighter_id)
+        if fighter is None:
+            return "?"
+        return f"{fighter.first_name} {fighter.last_name}"

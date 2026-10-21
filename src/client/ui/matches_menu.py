@@ -9,23 +9,42 @@ from typing import Any
 from rich.table import Table
 
 from src.client.gateway import ServerGateway, ServerError
-from src.ui.console import console
-from src.ui.helpers import (
-    ask, ask_bool, ask_float_optional, ask_int_optional, ask_optional,
-    choose_from_list, empty_table_msg, error, info, make_table,
-    pause, rel_badge, section, success,
+from src.client.ui.console import console
+from src.client.ui.helpers import fighter_label, run_handler
+from src.client.ui.helpers import (
+    ask,
+    ask_bool,
+    ask_float_optional,
+    ask_int_optional,
+    ask_optional,
+    choose_from_list,
+    empty_table_msg,
+    error,
+    info,
+    make_table,
+    pause,
+    rel_badge,
+    section,
+    success,
 )
 
+# ── Table renderer ───────────────────────────────────────────────────────────
 
-# ── Table renderer ─────────────────────────────────────────────────────────────
 
 def _match_table(
     matches: list[dict[str, Any]], title: str = "Matches"
 ) -> Table:
     t = make_table(
-        "ID", "Tournament", "Category", "Round",
-        "Blue fighter", "Red fighter", "Winner",
-        "Method", "Duration (s)", "Scheduled",
+        "ID",
+        "Tournament",
+        "Category",
+        "Round",
+        "Blue fighter",
+        "Red fighter",
+        "Winner",
+        "Method",
+        "Duration (s)",
+        "Scheduled",
         title=title,
     )
     for m in matches:
@@ -44,7 +63,8 @@ def _match_table(
     return t
 
 
-# ── CRUD ───────────────────────────────────────────────────────────────────────
+# ── CRUD ─────────────────────────────────────────────────────────────────────
+
 
 def _create(gw: ServerGateway) -> None:
     section(f"Create Match  {rel_badge('N:M')}")
@@ -63,7 +83,10 @@ def _create(gw: ServerGateway) -> None:
     categories = gw.categories.list_all()
     category = choose_from_list(
         categories,
-        lambda c: f"{c['name']} | {c.get('belt_level') or '?'} | {c.get('gender') or '?'}",
+        lambda c: (
+            f"{c['name']} | {c.get('belt_level') or '?'} | "
+            f"{c.get('gender') or '?'}"
+        ),
         "Select Category (optional — 0 to skip)",
     )
 
@@ -72,16 +95,20 @@ def _create(gw: ServerGateway) -> None:
         error("No fighters available. Create some fighters first.")
         return
 
-    fighter_label = lambda f: f"{f['first_name']} {f['last_name']} ({f.get('belt_level') or '?'})"
-
     console.print(f"\n  {rel_badge('N:M')} [bold]Blue corner fighter[/]")
-    blue = choose_from_list(fighters, fighter_label, "Select Blue Fighter (0 = skip)")
+    blue = choose_from_list(
+        fighters, fighter_label, "Select Blue Fighter (0 = skip)"
+    )
 
     console.print(f"\n  {rel_badge('N:M')} [bold]Red corner fighter[/]")
-    red = choose_from_list(fighters, fighter_label, "Select Red Fighter (0 = skip)")
+    red = choose_from_list(
+        fighters, fighter_label, "Select Red Fighter (0 = skip)"
+    )
 
     console.print(f"\n  {rel_badge('N:M')} [bold]Winner[/]")
-    winner = choose_from_list(fighters, fighter_label, "Select Winner (0 = skip / TBD)")
+    winner = choose_from_list(
+        fighters, fighter_label, "Select Winner (0 = skip / TBD)"
+    )
 
     round_num = ask_int_optional("Round number")
     duration = ask_float_optional("Duration (seconds)")
@@ -101,7 +128,8 @@ def _create(gw: ServerGateway) -> None:
             scheduled_time=sched_str,
         )
         success(
-            f"Match created — ID {match['match_id']} in tournament '{tournament['name']}'."
+            f"Match created — ID {match['match_id']} in tournament "
+            f"'{tournament['name']}'."
         )
     except (ServerError, ValueError) as exc:
         error(str(exc))
@@ -130,7 +158,10 @@ def _read_by_id(gw: ServerGateway) -> None:
 
     console.print(_match_table([m], title=f"Match #{mid}"))
 
-    console.print(f"\n  Relationship [bold]N:M[/] — Fighters involved  {rel_badge('N:M')}")
+    console.print(
+        "\n  Relationship [bold]N:M[/] — Fighters involved  "
+        f"{rel_badge('N:M')}"
+    )
     fighters_table = make_table("Role", "Fighter ID", "Name")
     fighters_info = m.get("fighters_info", {})
     for role in ("blue", "red", "winner"):
@@ -159,7 +190,9 @@ def _update(gw: ServerGateway) -> None:
     info("  Leave blank to keep current values.")
 
     console.print(f"\n  {rel_badge('N:M')} Update winner fighter ID")
-    new_winner = ask_int_optional(f"Winner fighter ID [{m.get('winner_id') or 'none'}]")
+    new_winner = ask_int_optional(
+        f"Winner fighter ID [{m.get('winner_id') or 'none'}]"
+    )
 
     win_method_raw = ask(
         f"Win method [{m.get('win_method') or ''}]",
@@ -208,7 +241,8 @@ def _delete(gw: ServerGateway) -> None:
         error(str(exc))
 
 
-# ── Searches ───────────────────────────────────────────────────────────────────
+# ── Searches ─────────────────────────────────────────────────────────────────
+
 
 def _filter_by_tournament(gw: ServerGateway) -> None:
     section("Filter Matches by Tournament")
@@ -234,7 +268,9 @@ def _filter_by_fighter(gw: ServerGateway) -> None:
     if not matches:
         info(f"No matches for fighter #{fid}.")
     else:
-        console.print(_match_table(matches, title=f"All matches — Fighter #{fid}"))
+        console.print(
+            _match_table(matches, title=f"All matches — Fighter #{fid}")
+        )
         info(f"  Wins: {wins} / {len(matches)}")
 
 
@@ -260,7 +296,9 @@ def _filter_by_round(gw: ServerGateway) -> None:
     if not results:
         info(f"No matches in tournament {tid}, round {rnd}.")
     else:
-        console.print(_match_table(results, title=f"Tournament #{tid} — Round {rnd}"))
+        console.print(
+            _match_table(results, title=f"Tournament #{tid} — Round {rnd}")
+        )
 
 
 def _wins_by_fighter(gw: ServerGateway) -> None:
@@ -276,19 +314,19 @@ def _wins_by_fighter(gw: ServerGateway) -> None:
         info(f"  Total wins: {len(results)}")
 
 
-# ── Submenu ────────────────────────────────────────────────────────────────────
+# ── Submenu ──────────────────────────────────────────────────────────────────
 
 _MENU_ITEMS = [
-    ("List all matches",                        _list_all),
-    ("Get match by ID (+ fighters)",            _read_by_id),
-    (f"Create match  [rel_n_m](N:M)[/]",        _create),
-    ("Update match",                            _update),
-    ("Delete match",                            _delete),
-    ("Filter by tournament",                    _filter_by_tournament),
-    (f"Matches by fighter  [rel_n_m](N:M)[/]",  _filter_by_fighter),
-    ("Filter by category",                      _filter_by_category),
-    ("Filter by round",                         _filter_by_round),
-    ("Wins by fighter",                         _wins_by_fighter),
+    ("List all matches", _list_all),
+    ("Get match by ID (+ fighters)", _read_by_id),
+    ("Create match  [rel_n_m](N:M)[/]", _create),
+    ("Update match", _update),
+    ("Delete match", _delete),
+    ("Filter by tournament", _filter_by_tournament),
+    ("Matches by fighter  [rel_n_m](N:M)[/]", _filter_by_fighter),
+    ("Filter by category", _filter_by_category),
+    ("Filter by round", _filter_by_round),
+    ("Wins by fighter", _wins_by_fighter),
 ]
 
 
@@ -297,7 +335,7 @@ def matches_menu(gw: ServerGateway) -> None:
         section("Matches")
         for i, (label, _) in enumerate(_MENU_ITEMS, start=1):
             console.print(f"  [muted]{i:>2}.[/] {label}")
-        console.print(f"  [muted] 0.[/] Back")
+        console.print("  [muted] 0.[/] Back")
 
         choice = ask_int_optional("Choose")
         if choice is None or choice == 0:
@@ -307,9 +345,6 @@ def matches_menu(gw: ServerGateway) -> None:
             continue
 
         _, handler = _MENU_ITEMS[choice - 1]
-        try:
-            handler(gw)
-        except Exception as exc:
-            error(f"Unexpected error: {exc}")
+        run_handler(handler, gw)
 
         pause()

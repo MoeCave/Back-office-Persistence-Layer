@@ -22,14 +22,14 @@ class BaseRepository(Generic[T]):
         self._session = session
         self._model = model
 
-    # ── Create ─────────────────────────────────────────────────────────────────
+    # ── Create ───────────────────────────────────────────────────────────────
     def add(self, entity: T) -> T:
         """Persist a new entity (added to the session; commit via UoW)."""
         self._session.add(entity)
         self._session.flush()
         return entity
 
-    # ── Read ───────────────────────────────────────────────────────────────────
+    # ── Read ─────────────────────────────────────────────────────────────────
     def get(self, pk: int) -> Optional[T]:
         """Retrieve a single entity by its integer primary key."""
         return self._session.get(self._model, pk)
@@ -39,7 +39,7 @@ class BaseRepository(Generic[T]):
         stmt = select(self._model)
         return list(self._session.scalars(stmt).all())
 
-    # ── Update ─────────────────────────────────────────────────────────────────
+    # ── Update ───────────────────────────────────────────────────────────────
     def update(self, entity: T) -> T:
         """Merge an entity back into the session and refresh last_update.
 
@@ -48,18 +48,20 @@ class BaseRepository(Generic[T]):
         the timestamp is always current.
         """
         if hasattr(entity, "last_update"):
-            entity.last_update = datetime.now(timezone.utc).replace(tzinfo=None)
+            entity.last_update = datetime.now(timezone.utc).replace(
+                tzinfo=None
+            )
         merged = self._session.merge(entity)
         self._session.flush()
         return merged
 
-    # ── Delete ─────────────────────────────────────────────────────────────────
+    # ── Delete ───────────────────────────────────────────────────────────────
     def delete(self, entity: T) -> None:
         """Remove an entity from the database."""
         self._session.delete(entity)
         self._session.flush()
 
-    # ── Count (utility) ────────────────────────────────────────────────────────
+    # ── Count (utility) ──────────────────────────────────────────────────────
     def count(self) -> int:
         """Return the total number of rows for this model."""
         stmt = select(func.count()).select_from(self._model)

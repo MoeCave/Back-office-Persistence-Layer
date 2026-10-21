@@ -18,17 +18,25 @@ class Category(Base):
 
     __tablename__ = "category"
 
-    category_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    category_id: Mapped[int] = mapped_column(
+        primary_key=True, autoincrement=True
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    belt_level: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    weight_min_kg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    weight_max_kg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    belt_level: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )
+    weight_min_kg: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
+    weight_max_kg: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
     gender: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     last_update: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, onupdate=func.now()
     )
 
-    # ── Relationships ──────────────────────────────────────────────────────────
+    # ── Relationships ────────────────────────────────────────────────────────
     registrations: Mapped[List["FighterCategoryRegistration"]] = relationship(
         "FighterCategoryRegistration",
         back_populates="category",

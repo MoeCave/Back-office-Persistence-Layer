@@ -1,4 +1,4 @@
-"""Unit of Work — manages a single database session shared across all repositories."""
+"""Unit of Work — one database session shared by all repositories."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class UnitOfWork:
             uow.fighters.add(fighter)
             uow.commit()
 
-    The session_factory parameter lets tests inject an in-memory SQLite session:
+    The session_factory parameter lets tests inject an in-memory session:
         with UnitOfWork(session_factory=TestSession) as uow:
             ...
     """

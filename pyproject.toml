@@ -1,21 +1,26 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "tournament-manager"
-version = "1.0.0"
-description = "Back-office manager for contact-sport tournaments"
+version = "2.0.0"
+description = "Back-office manager for contact-sport tournaments (TCP client/server)"
 requires-python = ">=3.10"
 dependencies = [
     "sqlalchemy>=2.0",
     "alembic>=1.13",
     "psycopg2-binary>=2.9",
     "python-dotenv>=1.0",
+    "rich>=13.0",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "black",
+    "ruff",
     "ipykernel",
     "jupyter",
     "notebook",
@@ -23,8 +28,19 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]   # config* removed — config now lives inside src/domain/
+include = ["src*"]
 
 [tool.pytest.ini_options]
-testpaths = ["notebooks"]
+testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.black]
+line-length = 79
+extend-exclude = "(alembic|notebooks)"
+
+[tool.ruff]
+line-length = 79
+extend-exclude = ["alembic", "notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]

@@ -12,25 +12,16 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, Optional
 
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _fmt_dt(dt: Optional[datetime]) -> Optional[str]:
-    """Render a datetime as ISO-8601 string, or None."""
-    return dt.isoformat() if dt else None
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _parse_dt(value: Optional[str]) -> Optional[datetime]:
-    """Parse an ISO-8601 string back to datetime, or return None."""
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except (ValueError, TypeError):
-        return None
+def format_datetime(value: Optional[datetime]) -> Optional[str]:
+    """Render a datetime as an ISO-8601 string, or ``None``."""
+    return value.isoformat() if value else None
 
 
-# ── DTOs ───────────────────────────────────────────────────────────────────────
+# ── DTOs ─────────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class FighterDTO:
@@ -43,7 +34,7 @@ class FighterDTO:
     country: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
-    birth_date: Optional[str] = None    # ISO-8601 string
+    birth_date: Optional[str] = None  # ISO-8601 string
     created_at: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -95,8 +86,8 @@ class TournamentDTO:
     tournament_id: Optional[int]
     name: str
     location: Optional[str] = None
-    start_date: Optional[str] = None    # ISO-8601
-    end_date: Optional[str] = None      # ISO-8601
+    start_date: Optional[str] = None  # ISO-8601
+    end_date: Optional[str] = None  # ISO-8601
     max_fighters: Optional[int] = None
     created_at: Optional[str] = None
 
@@ -175,7 +166,7 @@ class MatchDTO:
     round_number: Optional[int] = None
     duration_seconds: Optional[float] = None
     win_method: Optional[str] = None
-    scheduled_time: Optional[str] = None   # ISO-8601
+    scheduled_time: Optional[str] = None  # ISO-8601
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -202,7 +193,7 @@ class RegistrationDTO:
     category_id: int
     tournament_id: int
     weight_in_weight_kg: Optional[float] = None
-    registration_date: Optional[str] = None    # ISO-8601
+    registration_date: Optional[str] = None  # ISO-8601
     is_approved: bool = False
     last_update: Optional[str] = None
 

@@ -23,11 +23,17 @@ class Tournament(Base):
 
     __tablename__ = "tournament"
 
-    tournament_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tournament_id: Mapped[int] = mapped_column(
+        primary_key=True, autoincrement=True
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     location: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
-    start_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    end_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    start_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    end_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
     max_fighters: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
@@ -36,7 +42,7 @@ class Tournament(Base):
         DateTime, nullable=True, onupdate=func.now()
     )
 
-    # ── Relationships ──────────────────────────────────────────────────────────
+    # ── Relationships ────────────────────────────────────────────────────────
     tatamis: Mapped[List["Tatami"]] = relationship(
         "Tatami",
         back_populates="tournament",

@@ -16,9 +16,9 @@ load_dotenv()
 ENVIRONMENT: str = os.getenv("APP_ENV", "development")
 
 DB_URL: str | None = {
-    "test":        os.getenv("DATABASE_URL_TEST", "sqlite:///./test_tournament.db"),
+    "test": os.getenv("DATABASE_URL_TEST", "sqlite:///./test_tournament.db"),
     "development": os.getenv("DATABASE_URL_DEVELOPMENT"),
-    "production":  os.getenv("DATABASE_URL_PRODUCTION"),
+    "production": os.getenv("DATABASE_URL_PRODUCTION"),
 }.get(ENVIRONMENT)
 
 

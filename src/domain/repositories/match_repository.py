@@ -15,7 +15,7 @@ class MatchRepository(BaseRepository[Match]):
         super().__init__(session, Match)
 
     def get_by_tournament(self, tournament_id: int) -> List[Match]:
-        """Return all matches for a given tournament, ordered by round and time."""
+        """Return the matches of a tournament, ordered by round and time."""
         stmt = (
             select(Match)
             .where(Match.tournament_id == tournament_id)
@@ -36,7 +36,9 @@ class MatchRepository(BaseRepository[Match]):
         stmt = select(Match).where(Match.category_id == category_id)
         return list(self._session.scalars(stmt).all())
 
-    def get_by_round(self, tournament_id: int, round_number: int) -> List[Match]:
+    def get_by_round(
+        self, tournament_id: int, round_number: int
+    ) -> List[Match]:
         """Return all matches for a specific round within a tournament."""
         stmt = select(Match).where(
             Match.tournament_id == tournament_id,

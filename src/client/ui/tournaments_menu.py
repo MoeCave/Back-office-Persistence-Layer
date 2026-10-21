@@ -9,22 +9,39 @@ from typing import Any
 from rich.table import Table
 
 from src.client.gateway import ServerGateway, ServerError
-from src.ui.console import console
-from src.ui.helpers import (
-    ask, ask_bool, ask_float_optional, ask_int_optional, ask_optional,
-    empty_table_msg, error, info, make_table, pause, rel_badge,
-    section, success,
+from src.client.ui.console import console
+from src.client.ui.helpers import run_handler
+from src.client.ui.helpers import (
+    ask,
+    ask_bool,
+    ask_float_optional,
+    ask_int_optional,
+    ask_optional,
+    empty_table_msg,
+    error,
+    info,
+    make_table,
+    pause,
+    rel_badge,
+    section,
+    success,
 )
 
+# ── Table renderers ──────────────────────────────────────────────────────────
 
-# ── Table renderers ────────────────────────────────────────────────────────────
 
 def _tournament_table(
     tournaments: list[dict[str, Any]], title: str = "Tournaments"
 ) -> Table:
     t = make_table(
-        "ID", "Name", "Location", "Start", "End",
-        "Max fighters", "Created", title=title,
+        "ID",
+        "Name",
+        "Location",
+        "Start",
+        "End",
+        "Max fighters",
+        "Created",
+        title=title,
     )
     for t_obj in tournaments:
         t.add_row(
@@ -41,7 +58,11 @@ def _tournament_table(
 
 def _tatami_table(tatamis: list[dict[str, Any]]) -> Table:
     t = make_table(
-        "ID", "Name", "Mat #", "Area (m²)", "Active",
+        "ID",
+        "Name",
+        "Mat #",
+        "Area (m²)",
+        "Active",
         title=f"Tatamis  {rel_badge('1:N')}",
     )
     for ta in tatamis:
@@ -55,7 +76,8 @@ def _tatami_table(tatamis: list[dict[str, Any]]) -> Table:
     return t
 
 
-# ── CRUD ───────────────────────────────────────────────────────────────────────
+# ── CRUD ─────────────────────────────────────────────────────────────────────
+
 
 def _create(gw: ServerGateway) -> None:
     section("Create Tournament")
@@ -104,21 +126,26 @@ def _read_by_id(gw: ServerGateway) -> None:
 
     console.print(_tournament_table([t], title=f"Tournament #{tid}"))
 
-    # ── 1:N Tatamis ────────────────────────────────────────────────────────────
-    console.print(f"\n  Relationship [bold]1:N[/] — Tatamis  {rel_badge('1:N')}")
+    # ── 1:N Tatamis ──────────────────────────────────────────────────────────
+    console.print(
+        f"\n  Relationship [bold]1:N[/] — Tatamis  {rel_badge('1:N')}"
+    )
     tatamis = t.get("tatamis", [])
     if tatamis:
         console.print(_tatami_table(tatamis))
     else:
         info("  No tatamis configured.")
 
-    # ── 1:N Matches ────────────────────────────────────────────────────────────
-    console.print(f"\n  Relationship [bold]1:N[/] — Matches  {rel_badge('1:N')}")
+    # ── 1:N Matches ──────────────────────────────────────────────────────────
+    console.print(
+        f"\n  Relationship [bold]1:N[/] — Matches  {rel_badge('1:N')}"
+    )
     info(f"  Total matches: {t.get('total_matches', 0)}")
 
-    # ── N:M+attrs Registrations ────────────────────────────────────────────────
+    # ── N:M+attrs Registrations ──────────────────────────────────────────────
     console.print(
-        f"\n  Relationship [bold]N:M+attrs[/] — Registrations  {rel_badge('N:M+attrs')}"
+        "\n  Relationship [bold]N:M+attrs[/] — Registrations  "
+        f"{rel_badge('N:M+attrs')}"
     )
     info(
         f"  Total registrations: {t.get('total_registrations', 0)}   "
@@ -140,8 +167,11 @@ def _update(gw: ServerGateway) -> None:
     info(f"  Editing: {t['name']}")
     new_name = ask(f"Name [{t['name']}]", default=t["name"]) or t["name"]
     new_loc = (
-        ask(f"Location [{t.get('location') or ''}]",
-            default=t.get("location") or "") or None
+        ask(
+            f"Location [{t.get('location') or ''}]",
+            default=t.get("location") or "",
+        )
+        or None
     )
     max_raw = ask(
         f"Max fighters [{t.get('max_fighters') or ''}]",
@@ -183,7 +213,8 @@ def _delete(gw: ServerGateway) -> None:
         error(str(exc))
 
 
-# ── Searches ───────────────────────────────────────────────────────────────────
+# ── Searches ─────────────────────────────────────────────────────────────────
+
 
 def _search_by_name(gw: ServerGateway) -> None:
     section("Search by Name")
@@ -223,7 +254,8 @@ def _list_upcoming(gw: ServerGateway) -> None:
         console.print(_tournament_table(results, title="Upcoming"))
 
 
-# ── 1:N Tatami management ──────────────────────────────────────────────────────
+# ── 1:N Tatami management ────────────────────────────────────────────────────
+
 
 def _add_tatami(gw: ServerGateway) -> None:
     section(f"Add Tatami to Tournament  {rel_badge('1:N')}")
@@ -248,8 +280,11 @@ def _add_tatami(gw: ServerGateway) -> None:
 
     try:
         tatami = gw.tournaments.add_tatami_to_tournament(
-            tid, name=name, mat_number=mat_number,
-            area_size=area_size, is_active=is_active,
+            tid,
+            name=name,
+            mat_number=mat_number,
+            area_size=area_size,
+            is_active=is_active,
         )
         success(
             f"Tatami '{tatami['name']}' (ID {tatami['tatami_id']}) "
@@ -277,20 +312,20 @@ def _list_tatamis(gw: ServerGateway) -> None:
         info("  No tatamis configured for this tournament.")
 
 
-# ── Submenu ────────────────────────────────────────────────────────────────────
+# ── Submenu ──────────────────────────────────────────────────────────────────
 
 _MENU_ITEMS = [
-    ("List all tournaments",                           _list_all),
-    ("Get tournament by ID (+ relationships)",         _read_by_id),
-    ("Create tournament",                              _create),
-    ("Update tournament",                              _update),
-    ("Delete tournament",                              _delete),
-    ("Search by name",                                 _search_by_name),
-    ("Filter by location",                             _search_by_location),
-    ("Active / upcoming tournaments",                  _list_active),
-    ("Not-yet-started tournaments",                    _list_upcoming),
-    (f"Add tatami to tournament  [rel_1_n](1:N)[/]",  _add_tatami),
-    (f"List tatamis of tournament  [rel_1_n](1:N)[/]", _list_tatamis),
+    ("List all tournaments", _list_all),
+    ("Get tournament by ID (+ relationships)", _read_by_id),
+    ("Create tournament", _create),
+    ("Update tournament", _update),
+    ("Delete tournament", _delete),
+    ("Search by name", _search_by_name),
+    ("Filter by location", _search_by_location),
+    ("Active / upcoming tournaments", _list_active),
+    ("Not-yet-started tournaments", _list_upcoming),
+    ("Add tatami to tournament  [rel_1_n](1:N)[/]", _add_tatami),
+    ("List tatamis of tournament  [rel_1_n](1:N)[/]", _list_tatamis),
 ]
 
 
@@ -299,7 +334,7 @@ def tournaments_menu(gw: ServerGateway) -> None:
         section("Tournaments")
         for i, (label, _) in enumerate(_MENU_ITEMS, start=1):
             console.print(f"  [muted]{i:>2}.[/] {label}")
-        console.print(f"  [muted] 0.[/] Back")
+        console.print("  [muted] 0.[/] Back")
 
         choice = ask_int_optional("Choose")
         if choice is None or choice == 0:
@@ -309,9 +344,6 @@ def tournaments_menu(gw: ServerGateway) -> None:
             continue
 
         _, handler = _MENU_ITEMS[choice - 1]
-        try:
-            handler(gw)
-        except Exception as exc:
-            error(f"Unexpected error: {exc}")
+        run_handler(handler, gw)
 
         pause()

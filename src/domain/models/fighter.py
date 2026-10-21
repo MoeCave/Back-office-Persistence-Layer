@@ -17,19 +17,28 @@ if TYPE_CHECKING:
 class Fighter(Base):
     """Represents a fighter / competitor.
 
-    Aggregate root: owns MedicalRecord (1:1), FighterCategoryRegistration (1:N),
+    Aggregate root: owns MedicalRecord (1:1), FighterCategoryRegistration
+    (1:N),
     and participates in Match records as blue, red, or winner.
     """
 
     __tablename__ = "fighter"
 
-    fighter_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    fighter_id: Mapped[int] = mapped_column(
+        primary_key=True, autoincrement=True
+    )
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    birth_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    birth_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
     gender: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
-    belt_level: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    club_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    belt_level: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )
+    club_name: Mapped[Optional[str]] = mapped_column(
+        String(150), nullable=True
+    )
     country: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -40,7 +49,7 @@ class Fighter(Base):
         DateTime, nullable=True, onupdate=func.now()
     )
 
-    # ── Relationships ──────────────────────────────────────────────────────────
+    # ── Relationships ────────────────────────────────────────────────────────
     medical_record: Mapped[Optional["MedicalRecord"]] = relationship(
         "MedicalRecord",
         back_populates="fighter",

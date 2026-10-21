@@ -1,5 +1,30 @@
-# Gestor de Torneos de Deportes de Contacto
-## Persistence Layer — SQLAlchemy ORM + Alembic
+# Tournament Back-Office Manager — v2.0.0
+## TCP client/server · SQLAlchemy persistence · Alembic
+
+The back-office (CRUD for fighters, tournaments, categories, matches and
+registrations) is split into two independent programs that talk over
+blocking TCP sockets (`socket` from the standard library):
+
+| Program | Entry point | Responsibility |
+|---------|-------------|----------------|
+| **Server** | `python server.py` | Listens on a port, serves **one client at a time**, routes requests to services, accesses the database through repositories |
+| **Client** | `python client.py` | Connects to the server, sends requests and shows results in a Rich console UI. It never imports SQLAlchemy or the domain layer |
+
+The communication protocol (framing, request/response format, every
+supported operation and the error strategy) is documented in
+**[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
+
+```
+ client.py ──► src/client (menus, gateway)
+                   │  JSON frames over TCP  (src/common/protocol.py)
+                   ▼
+ server.py ──► src/server/app.py        accept loop, one client at a time
+                   └► router.py + routes.py   (resource, action) → handler
+                         └► services/*        validation + business rules
+                               └► converters.py / dto.py   ORM → DTO dicts
+                                     └► src/domain (models, repositories,
+                                                    UnitOfWork) → database
+```
 
 ---
 
@@ -7,44 +32,26 @@
 
 ```
 Back-office-Persistence-Layer/
-├── alembic/
-│   ├── env.py                          ← imports Base from src/domain/db.py
-│   ├── script.py.mako
-│   └── versions/
-│       ├── 001_initial_schema.py       ← "Initial schema creation"
-│       └── 002_add_last_update.py      ← "Added last_update attribute"
-├── alembic.ini
-├── notebooks/
-│   └── 000_repositories.ipynb         ← all repository tests (SQLite in-memory)
-├── requirements.txt
-├── docker-compose.yml
-├── pyproject.toml
-├── verify.py
-├── .env.example
+├── client.py                    ← TCP client entry point
+├── server.py                    ← TCP server entry point
+├── docs/PROTOCOL.md             ← protocol documentation
+├── alembic/ …                   ← migrations (001 initial, 002 last_update)
+├── tests/                       ← pytest suite (no external services)
+├── verify.py                    ← offline sanity check of the setup
 └── src/
-    └── domain/
-        ├── __init__.py                 ← re-exports everything (BandHub style)
-        ├── config.py                   ← ENVIRONMENT, DB_URL, get_database_url()
-        ├── db.py                       ← Base, engine, Session
-        ├── models/
-        │   ├── __init__.py
-        │   ├── base.py                 ← re-exports Base from db.py
-        │   ├── fighter.py
-        │   ├── medical_record.py
-        │   ├── tournament.py
-        │   ├── tatami.py
-        │   ├── category.py
-        │   ├── fighter_category_registration.py
-        │   └── match.py
-        └── repositories/
-            ├── __init__.py
-            ├── base_repository.py      ← Generic[T] CRUD + count()
-            ├── fighter_repository.py
-            ├── tournament_repository.py
-            ├── category_repository.py
-            ├── match_repository.py
-            ├── registration_repository.py
-            └── unit_of_work.py         ← imports Session from src.domain.db
+    ├── common/protocol.py       ← framing, envelopes, validation (shared)
+    ├── client/
+    │   ├── gateway.py           ← ServerGateway + resource proxies
+    │   └── ui/                  ← Rich console menus and helpers
+    ├── server/
+    │   ├── app.py               ← blocking TCP server loop
+    │   ├── router.py            ← dispatch + exception → error response
+    │   ├── routes.py            ← declarative (resource, action) table
+    │   ├── errors.py            ← NotFound / Validation / Conflict errors
+    │   ├── validation.py        ← payload validation helpers
+    │   ├── converters.py, dto.py← ORM → DTO (no ORM object leaves the server)
+    │   └── services/            ← one service per aggregate
+    └── domain/                  ← SQLAlchemy models, repositories, UnitOfWork
 ```
 
 ---
@@ -121,7 +128,7 @@ Running upgrade  -> 001_initial_schema, Initial schema creation
 Running upgrade 001_initial_schema -> 002_add_last_update, Added last_update attribute
 ```
 
-### 7. Verify the setup
+### 7. Verify the setup (optional)
 
 ```bash
 python verify.py
@@ -137,13 +144,22 @@ Expected output:
 ## Daily workflow
 
 ```bash
-# Start
-pi main.py
+# 1. Start the database and activate the environment
 docker compose up -d
 source .venv/bin/activate
 
-# Run notebook tests (SQLite in-memory, no Docker needed)
-jupyter notebook notebooks/000_repositories.ipynb
+# 2. Terminal 1 — server (APP_ENV=test uses SQLite, no Docker needed)
+python server.py                    # --host 127.0.0.1 --port 9000
+
+# 3. Terminal 2 — client
+python client.py                    # --host 127.0.0.1 --port 9000
+
+# Run the unit tests (SQLite in memory, sockets mocked / loopback)
+pytest
+
+# Code style (PEP 8)
+black src tests client.py server.py verify.py
+ruff check src tests client.py server.py verify.py
 
 # Stop Docker
 docker compose down
@@ -245,3 +261,14 @@ Run all commands from the project root directory, not from inside a subfolder.
 **`ValueError: No DATABASE_URL configured`**
 `.env` file is missing or `APP_ENV` is set to an environment with no URL.
 Run `cp .env.example .env` and fill in the values.
+
+**`Cannot connect to server at 127.0.0.1:9000`** (client)
+The server is not running or uses another port. Start it with
+`python server.py` (add `APP_ENV=test` to use SQLite) and pass the same
+`--port` to the client.
+
+**`Address already in use`** (server)
+Another process holds the port. Use `python server.py --port 9001`.
+
+**`pytest` finds no tests**
+Run it from the project root; `pyproject.toml` points it to `tests/`.

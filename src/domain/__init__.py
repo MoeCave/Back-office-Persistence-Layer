@@ -25,13 +25,26 @@ from .repositories import (
 
 __all__ = [
     # Config
-    "ENVIRONMENT", "DB_URL", "get_database_url",
+    "ENVIRONMENT",
+    "DB_URL",
+    "get_database_url",
     # DB
-    "Base", "engine", "Session",
+    "Base",
+    "engine",
+    "Session",
     # Models
-    "Fighter", "MedicalRecord", "Tournament", "Tatami",
-    "Category", "FighterCategoryRegistration", "Match",
+    "Fighter",
+    "MedicalRecord",
+    "Tournament",
+    "Tatami",
+    "Category",
+    "FighterCategoryRegistration",
+    "Match",
     # Repositories
-    "FighterRepository", "TournamentRepository", "CategoryRepository",
-    "MatchRepository", "RegistrationRepository", "UnitOfWork",
+    "FighterRepository",
+    "TournamentRepository",
+    "CategoryRepository",
+    "MatchRepository",
+    "RegistrationRepository",
+    "UnitOfWork",
 ]

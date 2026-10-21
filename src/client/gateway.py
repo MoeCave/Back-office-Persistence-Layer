@@ -14,14 +14,26 @@ from __future__ import annotations
 import socket
 from typing import Any
 
-from src.server.protocol import send_message, receive_message
-
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 9000
+from src.common.protocol import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    ErrorCode,
+    receive_message,
+    send_message,
+)
 
 
 class ServerError(Exception):
-    """Raised when the server responds with success=false."""
+    """Raised when the server responds with success=false.
+
+    ``code`` holds the machine-readable ``error_code`` of the response.
+    """
+
+    def __init__(
+        self, message: str, code: str = ErrorCode.BAD_REQUEST
+    ) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class ConnectionFailedError(Exception):
@@ -58,7 +70,7 @@ class ServerGateway:
         self.matches: _MatchProxy
         self.registrations: _RegistrationProxy
 
-    # ── Lifecycle ──────────────────────────────────────────────────────────────
+    # ── Lifecycle ────────────────────────────────────────────────────────────
 
     def connect(self) -> None:
         """Open a blocking TCP connection to the server."""
@@ -94,7 +106,7 @@ class ServerGateway:
     def __exit__(self, *_) -> None:
         self.close()
 
-    # ── Raw request ────────────────────────────────────────────────────────────
+    # ── Raw request ──────────────────────────────────────────────────────────
 
     def request(
         self,
@@ -121,11 +133,32 @@ class ServerGateway:
         response = receive_message(self._sock)
 
         if not response.get("success"):
-            raise ServerError(response.get("error", "Unknown server error."))
+            raise ServerError(
+                response.get("error") or "Unknown server error.",
+                response.get("error_code") or ErrorCode.BAD_REQUEST,
+            )
         return response.get("data")
 
+    def get_or_none(
+        self,
+        resource: str,
+        action: str,
+        payload: dict[str, Any] | None = None,
+    ) -> Any:
+        """Like :meth:`request`, but return None when nothing is found.
 
-# ── Resource proxies (one per domain entity) ───────────────────────────────────
+        Only ``NOT_FOUND`` is swallowed; any other server error is raised.
+        """
+        try:
+            return self.request(resource, action, payload)
+        except ServerError as exc:
+            if exc.code == ErrorCode.NOT_FOUND:
+                return None
+            raise
+
+
+# ── Resource proxies (one per domain entity) ─────────────────────────────────
+
 
 class _FighterProxy:
     def __init__(self, gw: ServerGateway) -> None:
@@ -138,15 +171,15 @@ class _FighterProxy:
         self, page: int = 1, page_size: int = 10
     ) -> dict[str, Any]:
         return self._gw.request(
-            "fighters", "list_paginated",
+            "fighters",
+            "list_paginated",
             {"page": page, "page_size": page_size},
         )
 
     def get(self, fighter_id: int) -> dict[str, Any] | None:
-        try:
-            return self._gw.request("fighters", "get", {"fighter_id": fighter_id})
-        except ServerError:
-            return None
+        return self._gw.get_or_none(
+            "fighters", "get", {"fighter_id": fighter_id}
+        )
 
     def create(self, **kwargs: Any) -> dict[str, Any]:
         return self._gw.request("fighters", "create", kwargs)
@@ -191,7 +224,8 @@ class _FighterProxy:
         self, fighter_id: int, **kwargs: Any
     ) -> dict[str, Any]:
         return self._gw.request(
-            "fighters", "upsert_medical_record",
+            "fighters",
+            "upsert_medical_record",
             {"fighter_id": fighter_id, **kwargs},
         )
 
@@ -199,7 +233,8 @@ class _FighterProxy:
         self, fighter_id: int, category_id: int, tournament_id: int
     ) -> dict[str, Any]:
         return self._gw.request(
-            "fighters", "approve_registration",
+            "fighters",
+            "approve_registration",
             {
                 "fighter_id": fighter_id,
                 "category_id": category_id,
@@ -216,27 +251,29 @@ class _TournamentProxy:
         return self._gw.request("tournaments", "list")
 
     def get(self, tournament_id: int) -> dict[str, Any] | None:
-        try:
-            return self._gw.request(
-                "tournaments", "get", {"tournament_id": tournament_id}
-            )
-        except ServerError:
-            return None
+        return self._gw.get_or_none(
+            "tournaments", "get", {"tournament_id": tournament_id}
+        )
 
     def create(self, **kwargs: Any) -> dict[str, Any]:
         return self._gw.request("tournaments", "create", kwargs)
 
     def update(self, tournament_id: int, **kwargs: Any) -> dict[str, Any]:
         return self._gw.request(
-            "tournaments", "update",
+            "tournaments",
+            "update",
             {"tournament_id": tournament_id, **kwargs},
         )
 
     def delete(self, tournament_id: int) -> None:
-        self._gw.request("tournaments", "delete", {"tournament_id": tournament_id})
+        self._gw.request(
+            "tournaments", "delete", {"tournament_id": tournament_id}
+        )
 
     def get_by_name(self, name: str) -> list[dict[str, Any]]:
-        return self._gw.request("tournaments", "search_by_name", {"name": name})
+        return self._gw.request(
+            "tournaments", "search_by_name", {"name": name}
+        )
 
     def get_by_location(self, location: str) -> list[dict[str, Any]]:
         return self._gw.request(
@@ -258,7 +295,8 @@ class _TournamentProxy:
         is_active: bool = True,
     ) -> dict[str, Any]:
         return self._gw.request(
-            "tournaments", "add_tatami",
+            "tournaments",
+            "add_tatami",
             {
                 "tournament_id": tournament_id,
                 "name": name,
@@ -282,12 +320,9 @@ class _CategoryProxy:
         return self._gw.request("categories", "list")
 
     def get(self, category_id: int) -> dict[str, Any] | None:
-        try:
-            return self._gw.request(
-                "categories", "get", {"category_id": category_id}
-            )
-        except ServerError:
-            return None
+        return self._gw.get_or_none(
+            "categories", "get", {"category_id": category_id}
+        )
 
     def create(self, **kwargs: Any) -> dict[str, Any]:
         return self._gw.request("categories", "create", kwargs)
@@ -309,7 +344,9 @@ class _CategoryProxy:
         )
 
     def get_by_gender(self, gender: str) -> list[dict[str, Any]]:
-        return self._gw.request("categories", "search_by_gender", {"gender": gender})
+        return self._gw.request(
+            "categories", "search_by_gender", {"gender": gender}
+        )
 
     def get_by_weight_range(
         self,
@@ -331,10 +368,7 @@ class _MatchProxy:
         return self._gw.request("matches", "list")
 
     def get(self, match_id: int) -> dict[str, Any] | None:
-        try:
-            return self._gw.request("matches", "get", {"match_id": match_id})
-        except ServerError:
-            return None
+        return self._gw.get_or_none("matches", "get", {"match_id": match_id})
 
     def create(self, **kwargs: Any) -> dict[str, Any]:
         return self._gw.request("matches", "create", kwargs)
@@ -366,7 +400,8 @@ class _MatchProxy:
         self, tournament_id: int, round_number: int
     ) -> list[dict[str, Any]]:
         return self._gw.request(
-            "matches", "get_by_round",
+            "matches",
+            "get_by_round",
             {"tournament_id": tournament_id, "round_number": round_number},
         )
 
@@ -383,25 +418,22 @@ class _RegistrationProxy:
     def list_all(self) -> list[dict[str, Any]]:
         return self._gw.request("registrations", "list")
 
-    def get(
-        self, pk: tuple[int, int, int]
-    ) -> dict[str, Any] | None:
+    def get(self, pk: tuple[int, int, int]) -> dict[str, Any] | None:
         fighter_id, category_id, tournament_id = pk
-        try:
-            return self._gw.request(
-                "registrations", "get",
-                {
-                    "fighter_id": fighter_id,
-                    "category_id": category_id,
-                    "tournament_id": tournament_id,
-                },
-            )
-        except ServerError:
-            return None
+        return self._gw.get_or_none(
+            "registrations",
+            "get",
+            {
+                "fighter_id": fighter_id,
+                "category_id": category_id,
+                "tournament_id": tournament_id,
+            },
+        )
 
     def get_by_tournament(self, tournament_id: int) -> list[dict[str, Any]]:
         return self._gw.request(
-            "registrations", "list_by_tournament",
+            "registrations",
+            "list_by_tournament",
             {"tournament_id": tournament_id},
         )
 
@@ -414,7 +446,8 @@ class _RegistrationProxy:
         self, tournament_id: int
     ) -> list[dict[str, Any]]:
         return self._gw.request(
-            "registrations", "list_pending_approvals",
+            "registrations",
+            "list_pending_approvals",
             {"tournament_id": tournament_id},
         )
 
