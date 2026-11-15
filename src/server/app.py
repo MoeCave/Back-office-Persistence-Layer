@@ -88,29 +88,30 @@ async def run_server(
         active_tasks.add(task)
         task.add_done_callback(active_tasks.discard)
 
+    server = await asyncio.start_server(
+        _on_connect,
+        host=host,
+        port=port,
+        backlog=backlog,
+    )
     try:
-        server = await asyncio.start_server(
-            _on_connect,
-            host=host,
-            port=port,
-            backlog=backlog,
+        log.info(
+            "Listening on %s:%d (workers=%d, max_conn=%d, "
+            "idle_timeout=%.1fs).",
+            host,
+            port,
+            db_workers,
+            max_connections,
+            client_timeout,
         )
-        async with server:
-            log.info(
-                "Listening on %s:%d (workers=%d, max_conn=%d, "
-                "idle_timeout=%.1fs).",
-                host,
-                port,
-                db_workers,
-                max_connections,
-                client_timeout,
-            )
-            if stop_event is None:
-                await server.serve_forever()
-            else:
-                await stop_event.wait()
+        if stop_event is None:
+            await server.serve_forever()
+        else:
+            await stop_event.wait()
     finally:
+        server.close()
         await _shutdown_active_tasks(active_tasks)
+        await server.wait_closed()
         executor.shutdown(wait=True)
 
 
