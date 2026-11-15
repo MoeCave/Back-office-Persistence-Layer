@@ -1,14 +1,14 @@
-"""TCP server: one blocking client at a time.
+"""TCP server: concurrent clients over asyncio streams.
 
-The server accepts a client, answers its framed JSON requests through
-the :class:`~src.server.router.Router` until it disconnects, and then
-waits for the next client.
+The server accepts multiple concurrent TCP connections via
+``asyncio.start_server``, dispatches each client's framed JSON requests
+through :class:`~src.server.router.Router`, and replies asynchronously.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import socket
 from typing import Any
 
 from src.common.protocol import (
@@ -18,48 +18,49 @@ from src.common.protocol import (
     MalformedMessageError,
     MessageTooLargeError,
     error,
-    receive_message,
-    send_message,
+    read_message,
     validate_request,
+    write_message,
 )
 from src.server.router import Router
 
 log = logging.getLogger(__name__)
 
-BACKLOG = 1  # only one client at a time
-DEFAULT_CLIENT_TIMEOUT = 900.0  # seconds of silence before dropping a client
+DEFAULT_BACKLOG = 128
+DEFAULT_CLIENT_TIMEOUT = 900.0
 
 __all__ = [
+    "DEFAULT_BACKLOG",
+    "DEFAULT_CLIENT_TIMEOUT",
     "DEFAULT_HOST",
     "DEFAULT_PORT",
+    "handle_client",
     "handle_request",
     "run_server",
-    "serve_client",
 ]
 
 
-def run_server(
+async def run_server(
     host: str,
     port: int,
-    session_factory,
-    client_timeout: float | None = DEFAULT_CLIENT_TIMEOUT,
+    session_factory: Any,
+    backlog: int = DEFAULT_BACKLOG,
 ) -> None:
-    """Start the blocking TCP server; stop with Ctrl+C."""
+    """Start the asyncio TCP server and serve until cancelled."""
     router = Router(session_factory)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_sock.bind((host, port))
-        server_sock.listen(BACKLOG)
-        log.info("Listening on %s:%d (one client at a time).", host, port)
-        try:
-            while True:
-                log.info("Waiting for a client connection...")
-                client_sock, addr = server_sock.accept()
-                log.info("Client connected: %s:%d", *addr)
-                serve_client(client_sock, addr, router, client_timeout)
-                log.info("Client %s:%d disconnected.", *addr)
-        except KeyboardInterrupt:
-            log.info("Server stopped by user.")
+    server = await asyncio.start_server(
+        lambda reader, writer: handle_client(reader, writer, router),
+        host=host,
+        port=port,
+        backlog=backlog,
+    )
+    async with server:
+        log.info(
+            "Listening on %s:%d (concurrent asyncio mode).",
+            host,
+            port,
+        )
+        await server.serve_forever()
 
 
 def handle_request(request: Any, router: Router) -> dict[str, Any]:
@@ -74,47 +75,51 @@ def handle_request(request: Any, router: Router) -> dict[str, Any]:
         return error("Internal server error.", ErrorCode.INTERNAL_ERROR)
 
 
-def serve_client(
-    client_sock: socket.socket,
-    addr: tuple[str, int],
+async def handle_client(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
     router: Router,
-    timeout: float | None = DEFAULT_CLIENT_TIMEOUT,
 ) -> None:
-    """Serve one connected client until it leaves or a fatal error."""
-    with client_sock:
-        client_sock.settimeout(timeout)
+    """Serve one connected client over asyncio streams."""
+    peer = writer.get_extra_info("peername")
+    log.info("Client connected: %s", peer)
+    try:
         while True:
             try:
-                request = receive_message(client_sock)
+                request = await read_message(reader)
             except MalformedMessageError as exc:
-                if not _try_send(client_sock, error(str(exc)), addr):
+                if not await _try_write(writer, error(str(exc)), peer):
                     break
                 continue
             except MessageTooLargeError as exc:
-                _try_send(client_sock, error(str(exc)), addr)
+                await _try_write(writer, error(str(exc)), peer)
                 break
             except ConnectionError:
                 break
-            except socket.timeout:
-                log.warning("Client %s timed out; closing.", addr)
-                break
-            except OSError as exc:
-                log.warning("Socket error with %s: %s", addr, exc)
-                break
 
-            log.debug("Request from %s: %s", addr, request)
+            log.debug("Request from %s: %s", peer, request)
+            # Note: router.handle is still synchronous; offloaded in Step 4.
             response = handle_request(request, router)
-            if not _try_send(client_sock, response, addr):
+            if not await _try_write(writer, response, peer):
                 break
+    finally:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
+        log.info("Client disconnected: %s", peer)
 
 
-def _try_send(
-    sock: socket.socket, response: dict[str, Any], addr: tuple[str, int]
+async def _try_write(
+    writer: asyncio.StreamWriter,
+    response: dict[str, Any],
+    peer: Any,
 ) -> bool:
-    """Send *response*; return False if the connection is unusable."""
+    """Write *response* to *writer*; return False if stream is closed."""
     try:
-        send_message(sock, response)
+        await write_message(writer, response)
     except OSError as exc:
-        log.warning("Failed to send response to %s: %s", addr, exc)
+        log.warning("Failed to send response to %s: %s", peer, exc)
         return False
     return True
