@@ -273,3 +273,140 @@ class TestStricterValidation:
     def test_null_payload_is_accepted(self):
         request = {"resource": "fighters", "action": "list", "payload": None}
         assert validate_request(request) is None
+
+
+# -- Asyncio stream framing tests --------------------------------------
+
+import asyncio  # noqa: E402
+
+import pytest  # noqa: E402
+
+from src.common.protocol import (  # noqa: E402
+    encode_message,
+    read_message,
+    write_message,
+)
+
+
+async def _run_stream_pair(server_handler):
+    """Start an ephemeral TCP server and return ``(server, host, port)``."""
+    server = await asyncio.start_server(server_handler, "127.0.0.1", 0)
+    host, port = server.sockets[0].getsockname()[:2]
+    return server, host, port
+
+
+async def test_async_write_and_read_roundtrip() -> None:
+    """``write_message`` and ``read_message`` exchange JSON roundtrips."""
+    received: list[dict[str, object]] = []
+
+    async def _handler(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        msg = await read_message(reader)
+        received.append(msg)
+        await write_message(writer, {"success": True, "data": msg})
+        writer.close()
+        await writer.wait_closed()
+
+    server, host, port = await _run_stream_pair(_handler)
+    async with server:
+        reader, writer = await asyncio.open_connection(host, port)
+        payload = {"resource": "fighters", "action": "list", "payload": {}}
+        await write_message(writer, payload)
+        reply = await read_message(reader)
+        writer.close()
+        await writer.wait_closed()
+
+    assert received == [payload]
+    assert reply == {"success": True, "data": payload}
+
+
+async def test_async_read_reassembles_fragmented_frames() -> None:
+    """``read_message`` reassembles frames sent one byte at a time."""
+    expected = {"resource": "tournaments", "action": "list", "payload": {}}
+    raw = encode_message(expected)
+
+    async def _handler(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        for idx in range(len(raw)):
+            writer.write(raw[idx : idx + 1])
+            await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server, host, port = await _run_stream_pair(_handler)
+    async with server:
+        reader, writer = await asyncio.open_connection(host, port)
+        decoded = await read_message(reader)
+        writer.close()
+        await writer.wait_closed()
+
+    assert decoded == expected
+
+
+async def test_async_read_eof_raises_connection_error() -> None:
+    """Closing the peer mid-frame raises ``ConnectionError``."""
+
+    async def _handler(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        writer.write(b"\x00\x00")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server, host, port = await _run_stream_pair(_handler)
+    async with server:
+        reader, writer = await asyncio.open_connection(host, port)
+        with pytest.raises(ConnectionError):
+            await read_message(reader)
+        writer.close()
+        await writer.wait_closed()
+
+
+async def test_async_read_oversized_header_raises() -> None:
+    """A header declaring > ``MAX_MESSAGE_BYTES`` raises before body read."""
+
+    async def _handler(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        writer.write(struct.pack(HEADER_FORMAT, MAX_MESSAGE_BYTES + 1))
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server, host, port = await _run_stream_pair(_handler)
+    async with server:
+        reader, writer = await asyncio.open_connection(host, port)
+        with pytest.raises(MessageTooLargeError):
+            await read_message(reader)
+        writer.close()
+        await writer.wait_closed()
+
+
+async def test_async_read_malformed_json_preserves_alignment() -> None:
+    """Invalid JSON raises ``MalformedMessageError`` without misaligning."""
+    bad_body = b"{not-valid-json"
+    bad_frame = struct.pack(HEADER_FORMAT, len(bad_body)) + bad_body
+    good_msg = {"resource": "categories", "action": "list", "payload": {}}
+    good_frame = encode_message(good_msg)
+
+    async def _handler(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        writer.write(bad_frame + good_frame)
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server, host, port = await _run_stream_pair(_handler)
+    async with server:
+        reader, writer = await asyncio.open_connection(host, port)
+        with pytest.raises(MalformedMessageError):
+            await read_message(reader)
+        recovered = await read_message(reader)
+        writer.close()
+        await writer.wait_closed()
+
+    assert recovered == good_msg

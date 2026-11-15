@@ -13,6 +13,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from typing import Any
+from collections.abc import Callable
 
 from src.common.protocol import (
     DEFAULT_HOST,
@@ -61,6 +62,7 @@ async def run_server(
     write_timeout: float = DEFAULT_WRITE_TIMEOUT,
     max_connections: int = DEFAULT_MAX_CONNECTIONS,
     stop_event: asyncio.Event | None = None,
+    on_started: Callable[[str, int], None] | None = None,
 ) -> None:
     """Start the asyncio TCP server and serve until stopped or cancelled."""
     router = Router(session_factory)
@@ -95,11 +97,19 @@ async def run_server(
         backlog=backlog,
     )
     try:
+        sockets = server.sockets
+        if sockets:
+            bound_host, bound_port = sockets[0].getsockname()[:2]
+            if on_started is not None:
+                on_started(bound_host, bound_port)
+        else:
+            bound_host, bound_port = host, port
+
         log.info(
             "Listening on %s:%d (workers=%d, max_conn=%d, "
             "idle_timeout=%.1fs).",
-            host,
-            port,
+            bound_host,
+            bound_port,
             db_workers,
             max_connections,
             client_timeout,

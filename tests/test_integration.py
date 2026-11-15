@@ -1,11 +1,12 @@
 """End-to-end tests: real TCP sockets, real router, in-memory SQLite.
 
-A server thread serves one client with ``serve_client`` while the test
-talks to it through ``ServerGateway`` or raw frames.
+A background asyncio server thread serves clients with ``run_server``
+while the test talks to it through ``ServerGateway`` or raw frames.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import struct
@@ -18,20 +19,19 @@ from sqlalchemy.pool import StaticPool
 
 from src.client.gateway import ServerError, ServerGateway
 from src.common.protocol import (
-    ErrorCode,
     HEADER_FORMAT,
+    ErrorCode,
     receive_message,
     send_message,
 )
 from src.domain.db import Base
 import src.domain.models  # noqa: F401 - registers the tables
-from src.server.app import serve_client
-from src.server.router import Router
+from src.server.app import run_server
 
 
 @pytest.fixture
 def live_server():
-    """Start a one-client server thread; yield its port."""
+    """Start an asyncio server thread; yield its ephemeral port."""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -43,26 +43,51 @@ def live_server():
         dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
     Base.metadata.create_all(engine)
-    router = Router(sessionmaker(bind=engine, autoflush=False))
+    session_factory = sessionmaker(bind=engine, autoflush=False)
 
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(1)
-    port = listener.getsockname()[1]
+    ready = threading.Event()
+    bound: dict[str, int] = {}
+    holder: dict[str, asyncio.AbstractEventLoop | asyncio.Event] = {}
 
-    def serve_forever():
-        while True:
-            try:
-                conn, addr = listener.accept()
-            except OSError:
-                return
-            serve_client(conn, addr, router, timeout=5)
+    def _thread_main() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        stop_event = asyncio.Event()
+        holder["loop"] = loop
+        holder["stop"] = stop_event
 
-    thread = threading.Thread(target=serve_forever, daemon=True)
+        def _on_started(_host: str, port: int) -> None:
+            bound["port"] = port
+            ready.set()
+
+        try:
+            loop.run_until_complete(
+                run_server(
+                    host="127.0.0.1",
+                    port=0,
+                    session_factory=session_factory,
+                    client_timeout=5.0,
+                    stop_event=stop_event,
+                    on_started=_on_started,
+                )
+            )
+        finally:
+            loop.close()
+
+    thread = threading.Thread(target=_thread_main, daemon=True)
     thread.start()
-    yield port
-    listener.close()
-    engine.dispose()
+    assert ready.wait(timeout=5.0), "Async server failed to start"
+    try:
+        yield bound["port"]
+    finally:
+        loop = holder.get("loop")
+        stop = holder.get("stop")
+        if isinstance(loop, asyncio.AbstractEventLoop) and isinstance(
+            stop, asyncio.Event
+        ):
+            loop.call_soon_threadsafe(stop.set)
+        thread.join(timeout=5.0)
+        engine.dispose()
 
 
 def _raw_frame(sock, body: bytes):

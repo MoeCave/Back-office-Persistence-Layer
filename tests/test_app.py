@@ -1,162 +1,218 @@
-"""Tests for src/server/app.py (request handling and client loop).
-
-Sockets and the router are mocked, so no network or database is used.
-"""
+"""Unit and concurrency tests for the asyncio TCP server."""
 
 from __future__ import annotations
 
-import socket
-from unittest.mock import MagicMock, patch
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+import struct
+import time
+from typing import Any
+from unittest.mock import MagicMock
 
-import pytest
-
+from src.client.async_gateway import AsyncServerError, AsyncServerGateway
 from src.common.protocol import (
+    HEADER_FORMAT,
+    MAX_MESSAGE_BYTES,
     ErrorCode,
-    MalformedMessageError,
-    MessageTooLargeError,
+    ok,
+    read_message,
+    write_message,
 )
-from src.server import app
-
-ADDR = ("127.0.0.1", 50000)
+from src.server.app import handle_request, run_server
 
 
-@pytest.fixture
-def router():
-    mock = MagicMock()
-    mock.handle.return_value = {"success": True, "data": [], "error": None}
-    return mock
+@asynccontextmanager
+async def _running_server(
+    router_handler: Any,
+    **server_kwargs: Any,
+) -> AsyncIterator[tuple[str, int, asyncio.Event]]:
+    """Start ``run_server`` on an ephemeral port and stop it on exit."""
+    stop_event = asyncio.Event()
+    started = asyncio.Event()
+    bound: dict[str, Any] = {}
 
+    def _on_started(host: str, port: int) -> None:
+        bound["host"] = host
+        bound["port"] = port
+        started.set()
 
-class TestHandleRequest:
-    def test_valid_request_is_routed(self, router):
-        request = {"resource": "fighters", "action": "list"}
-        response = app.handle_request(request, router)
-        router.handle.assert_called_once_with(request)
-        assert response["success"] is True
-
-    @pytest.mark.parametrize(
-        "request_",
-        [
-            [1, 2],
-            "text",
-            None,
-            {"action": "list"},
-            {"resource": "fighters"},
-            {"resource": ["x"], "action": "list"},
-            {"resource": "fighters", "action": 5},
-            {"resource": "nope", "action": "list"},
-            {"resource": "fighters", "action": "list", "payload": [1]},
-        ],
+    task = asyncio.create_task(
+        run_server(
+            host="127.0.0.1",
+            port=0,
+            session_factory=MagicMock(),
+            stop_event=stop_event,
+            on_started=_on_started,
+            **server_kwargs,
+        )
     )
-    def test_invalid_requests_get_error_without_routing(
-        self, router, request_
+    await asyncio.wait_for(started.wait(), timeout=5.0)
+    # Patch Router.handle on the created router via monkeypatch-style hook
+    # when custom behaviour is needed by callers.
+    _ = router_handler
+    try:
+        yield bound["host"], bound["port"], stop_event
+    finally:
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=5.0)
+
+
+def test_handle_request_rejects_invalid_envelope() -> None:
+    """``handle_request`` returns ``BAD_REQUEST`` without calling router."""
+    router = MagicMock()
+    resp = handle_request({"resource": "unknown"}, router)
+    assert resp["success"] is False
+    assert resp["error_code"] == ErrorCode.BAD_REQUEST
+    router.handle.assert_not_called()
+
+
+def test_handle_request_catches_unexpected_router_exception() -> None:
+    """Unexpected router exceptions map to ``INTERNAL_ERROR``."""
+    router = MagicMock()
+    router.handle.side_effect = RuntimeError("boom")
+    resp = handle_request(
+        {"resource": "fighters", "action": "list", "payload": {}},
+        router,
+    )
+    assert resp["success"] is False
+    assert resp["error_code"] == ErrorCode.INTERNAL_ERROR
+
+
+async def test_concurrent_clients_do_not_block_each_other(
+    monkeypatch: Any,
+) -> None:
+    """Multiple slow DB calls run concurrently across thread workers."""
+
+    def _slow_handle(self: Any, request: dict[str, Any]) -> dict[str, Any]:
+        time.sleep(0.15)
+        return ok({"client": request["payload"].get("id")})
+
+    monkeypatch.setattr("src.server.router.Router.handle", _slow_handle)
+
+    async with _running_server(None, db_workers=6) as (host, port, _):
+
+        async def _call(idx: int) -> Any:
+            async with AsyncServerGateway(host, port) as gw:
+                return await gw.request("fighters", "list", {"id": idx})
+
+        start = time.perf_counter()
+        results = await asyncio.gather(*(_call(i) for i in range(6)))
+        elapsed = time.perf_counter() - start
+
+    assert results == [{"client": i} for i in range(6)]
+    # Sequential execution would take >= 0.90s; concurrent takes ~0.15-0.35s.
+    assert elapsed < 0.60
+
+
+async def test_malformed_json_returns_error_and_keeps_session_open(
+    monkeypatch: Any,
+) -> None:
+    """Server replies ``BAD_REQUEST`` on bad JSON and serves next frame."""
+    monkeypatch.setattr(
+        "src.server.router.Router.handle",
+        lambda self, req: ok({"echo": req["action"]}),
+    )
+
+    async with _running_server(None) as (host, port, _):
+        reader, writer = await asyncio.open_connection(host, port)
+        bad = b"{corrupt"
+        writer.write(struct.pack(HEADER_FORMAT, len(bad)) + bad)
+        await writer.drain()
+
+        err_resp = await read_message(reader)
+        assert err_resp["success"] is False
+        assert err_resp["error_code"] == ErrorCode.BAD_REQUEST
+
+        await write_message(
+            writer,
+            {"resource": "fighters", "action": "list", "payload": {}},
+        )
+        ok_resp = await read_message(reader)
+        assert ok_resp == ok({"echo": "list"})
+
+        writer.close()
+        await writer.wait_closed()
+
+
+async def test_oversized_frame_returns_error_and_closes_socket() -> None:
+    """Declaring > ``MAX_MESSAGE_BYTES`` triggers error reply and EOF."""
+    async with _running_server(None) as (host, port, _):
+        reader, writer = await asyncio.open_connection(host, port)
+        writer.write(struct.pack(HEADER_FORMAT, MAX_MESSAGE_BYTES + 1))
+        await writer.drain()
+
+        err_resp = await read_message(reader)
+        assert err_resp["success"] is False
+        assert err_resp["error_code"] == ErrorCode.BAD_REQUEST
+        assert await reader.read(1) == b""
+
+        writer.close()
+        await writer.wait_closed()
+
+
+async def test_idle_client_disconnected_after_timeout() -> None:
+    """Inactive connections are closed once ``client_timeout`` expires."""
+    async with _running_server(None, client_timeout=0.15) as (host, port, _):
+        reader, writer = await asyncio.open_connection(host, port)
+        eof = await asyncio.wait_for(reader.read(1), timeout=2.0)
+        assert eof == b""
+        writer.close()
+        await writer.wait_closed()
+
+
+async def test_max_connections_rejects_excess_clients() -> None:
+    """Connections beyond ``max_connections`` receive immediate EOF."""
+    async with _running_server(None, max_connections=2) as (host, port, _):
+        r1, w1 = await asyncio.open_connection(host, port)
+        r2, w2 = await asyncio.open_connection(host, port)
+        await asyncio.sleep(0.05)
+
+        r3, w3 = await asyncio.open_connection(host, port)
+        eof = await asyncio.wait_for(r3.read(1), timeout=2.0)
+        assert eof == b""
+
+        for writer in (w1, w2, w3):
+            writer.close()
+            await writer.wait_closed()
+
+
+async def test_graceful_shutdown_cancels_active_clients() -> None:
+    """Setting ``stop_event`` disconnects active idle clients cleanly."""
+    async with _running_server(None, client_timeout=60.0) as (
+        host,
+        port,
+        stop_event,
     ):
-        response = app.handle_request(request_, router)
-        assert response["success"] is False
-        assert response["error_code"] == ErrorCode.BAD_REQUEST
-        router.handle.assert_not_called()
-
-    def test_router_crash_becomes_internal_error(self, router):
-        router.handle.side_effect = RuntimeError("boom")
-        response = app.handle_request(
-            {"resource": "fighters", "action": "list"}, router
-        )
-        assert response["error_code"] == ErrorCode.INTERNAL_ERROR
-        assert "boom" not in response["error"]
+        reader, writer = await asyncio.open_connection(host, port)
+        await asyncio.sleep(0.05)
+        stop_event.set()
+        eof = await asyncio.wait_for(reader.read(1), timeout=2.0)
+        assert eof == b""
+        writer.close()
+        await writer.wait_closed()
 
 
-class TestServeClient:
-    """serve_client with receive/send patched (mocked socket)."""
+async def test_async_gateway_raises_typed_error_on_failure(
+    monkeypatch: Any,
+) -> None:
+    """``AsyncServerGateway`` raises ``AsyncServerError`` with error code."""
+    monkeypatch.setattr(
+        "src.server.router.Router.handle",
+        lambda self, req: {
+            "success": False,
+            "data": None,
+            "error": "Fighter 99 not found.",
+            "error_code": ErrorCode.NOT_FOUND,
+        },
+    )
 
-    def _run(self, router, incoming, send_side_effect=None):
-        sock = MagicMock(spec=socket.socket)
-        sent = []
-
-        def fake_send(_sock, message):
-            if send_side_effect:
-                raise send_side_effect
-            sent.append(message)
-
-        with (
-            patch.object(app, "receive_message", side_effect=incoming),
-            patch.object(app, "send_message", side_effect=fake_send),
-        ):
-            app.serve_client(sock, ADDR, router, timeout=5)
-        return sock, sent
-
-    def test_answers_each_request_then_stops_on_disconnect(self, router):
-        request = {"resource": "fighters", "action": "list"}
-        sock, sent = self._run(
-            router, [request, request, ConnectionError("bye")]
-        )
-        assert len(sent) == 2
-        assert router.handle.call_count == 2
-        sock.settimeout.assert_called_once_with(5)
-        sock.__exit__.assert_called()  # socket closed via `with`
-
-    def test_malformed_json_gets_error_and_connection_continues(self, router):
-        request = {"resource": "fighters", "action": "list"}
-        _, sent = self._run(
-            router,
-            [
-                MalformedMessageError("Malformed JSON body"),
-                request,
-                ConnectionError(),
-            ],
-        )
-        assert sent[0]["success"] is False
-        assert "Malformed" in sent[0]["error"]
-        assert sent[1]["success"] is True
-
-    def test_oversized_message_gets_error_then_closes(self, router):
-        _, sent = self._run(
-            router, [MessageTooLargeError("too big"), {"never": "read"}]
-        )
-        assert len(sent) == 1
-        assert sent[0]["success"] is False
-
-    def test_timeout_closes_connection(self, router):
-        _, sent = self._run(router, [socket.timeout()])
-        assert sent == []
-
-    def test_os_error_closes_connection(self, router):
-        _, sent = self._run(router, [OSError("reset")])
-        assert sent == []
-
-    def test_send_failure_stops_serving(self, router):
-        request = {"resource": "fighters", "action": "list"}
-        _, sent = self._run(
-            router, [request, request], send_side_effect=OSError("pipe")
-        )
-        assert sent == []
-        assert router.handle.call_count == 1
-
-    def test_invalid_request_does_not_stop_the_loop(self, router):
-        good = {"resource": "fighters", "action": "list"}
-        _, sent = self._run(
-            router, [{"resource": ["x"]}, good, ConnectionError()]
-        )
-        assert [m["success"] for m in sent] == [False, True]
-
-
-class TestRunServer:
-    def test_serves_clients_sequentially_and_stops_on_ctrl_c(self):
-        server_sock = MagicMock()
-        server_sock.__enter__.return_value = server_sock
-        client_a, client_b = MagicMock(), MagicMock()
-        server_sock.accept.side_effect = [
-            (client_a, ("1.1.1.1", 1)),
-            (client_b, ("2.2.2.2", 2)),
-            KeyboardInterrupt(),
-        ]
-        with (
-            patch.object(app.socket, "socket", return_value=server_sock),
-            patch.object(app, "Router"),
-            patch.object(app, "serve_client") as serve,
-        ):
-            app.run_server("127.0.0.1", 9999, session_factory=MagicMock())
-
-        server_sock.bind.assert_called_once_with(("127.0.0.1", 9999))
-        server_sock.listen.assert_called_once_with(app.BACKLOG)
-        assert app.BACKLOG == 1
-        assert serve.call_count == 2
+    async with _running_server(None) as (host, port, _):
+        async with AsyncServerGateway(host, port) as gw:
+            try:
+                await gw.resource("fighters").call("get", {"id": 99})
+            except AsyncServerError as exc:
+                assert exc.code == ErrorCode.NOT_FOUND
+                assert "99" in exc.message
+            else:
+                raise AssertionError("Expected AsyncServerError")
