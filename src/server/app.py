@@ -1,15 +1,19 @@
-"""TCP server: one blocking client at a time.
+"""TCP server: concurrent clients over asyncio streams.
 
-The server accepts a client, answers its framed JSON requests through
-the :class:`~src.server.router.Router` until it disconnects, and then
-waits for the next client.
+The server accepts multiple concurrent TCP connections via
+``asyncio.start_server``, enforces connection limits and I/O timeouts,
+offloads synchronous routing and database work to a bounded
+:class:`~concurrent.futures.ThreadPoolExecutor`, and replies
+asynchronously.
 """
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import logging
-import socket
 from typing import Any
+from collections.abc import Callable
 
 from src.common.protocol import (
     DEFAULT_HOST,
@@ -18,48 +22,120 @@ from src.common.protocol import (
     MalformedMessageError,
     MessageTooLargeError,
     error,
-    receive_message,
-    send_message,
+    read_message,
     validate_request,
+    write_message,
 )
 from src.server.router import Router
 
 log = logging.getLogger(__name__)
 
-BACKLOG = 1  # only one client at a time
-DEFAULT_CLIENT_TIMEOUT = 900.0  # seconds of silence before dropping a client
+DEFAULT_BACKLOG = 128
+DEFAULT_CLIENT_TIMEOUT = 900.0
+DEFAULT_WRITE_TIMEOUT = 30.0
+DEFAULT_CLOSE_TIMEOUT = 5.0
+DEFAULT_DB_WORKERS = 10
+DEFAULT_MAX_CONNECTIONS = 100
 
 __all__ = [
+    "DEFAULT_BACKLOG",
+    "DEFAULT_CLIENT_TIMEOUT",
+    "DEFAULT_CLOSE_TIMEOUT",
+    "DEFAULT_DB_WORKERS",
     "DEFAULT_HOST",
+    "DEFAULT_MAX_CONNECTIONS",
     "DEFAULT_PORT",
+    "DEFAULT_WRITE_TIMEOUT",
+    "handle_client",
     "handle_request",
     "run_server",
-    "serve_client",
 ]
 
 
-def run_server(
+async def run_server(
     host: str,
     port: int,
-    session_factory,
-    client_timeout: float | None = DEFAULT_CLIENT_TIMEOUT,
+    session_factory: Any,
+    backlog: int = DEFAULT_BACKLOG,
+    db_workers: int = DEFAULT_DB_WORKERS,
+    client_timeout: float = DEFAULT_CLIENT_TIMEOUT,
+    write_timeout: float = DEFAULT_WRITE_TIMEOUT,
+    max_connections: int = DEFAULT_MAX_CONNECTIONS,
+    stop_event: asyncio.Event | None = None,
+    on_started: Callable[[str, int], None] | None = None,
 ) -> None:
-    """Start the blocking TCP server; stop with Ctrl+C."""
+    """Start the asyncio TCP server and serve until stopped or cancelled."""
     router = Router(session_factory)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_sock.bind((host, port))
-        server_sock.listen(BACKLOG)
-        log.info("Listening on %s:%d (one client at a time).", host, port)
-        try:
-            while True:
-                log.info("Waiting for a client connection...")
-                client_sock, addr = server_sock.accept()
-                log.info("Client connected: %s:%d", *addr)
-                serve_client(client_sock, addr, router, client_timeout)
-                log.info("Client %s:%d disconnected.", *addr)
-        except KeyboardInterrupt:
-            log.info("Server stopped by user.")
+    semaphore = asyncio.Semaphore(max_connections)
+    active_tasks: set[asyncio.Task[Any]] = set()
+    executor = ThreadPoolExecutor(
+        max_workers=db_workers,
+        thread_name_prefix="db-worker",
+    )
+
+    def _on_connect(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        task = asyncio.create_task(
+            handle_client(
+                reader,
+                writer,
+                router,
+                executor=executor,
+                client_timeout=client_timeout,
+                write_timeout=write_timeout,
+                semaphore=semaphore,
+            )
+        )
+        active_tasks.add(task)
+        task.add_done_callback(active_tasks.discard)
+
+    server = await asyncio.start_server(
+        _on_connect,
+        host=host,
+        port=port,
+        backlog=backlog,
+    )
+    try:
+        sockets = server.sockets
+        if sockets:
+            bound_host, bound_port = sockets[0].getsockname()[:2]
+            if on_started is not None:
+                on_started(bound_host, bound_port)
+        else:
+            bound_host, bound_port = host, port
+
+        log.info(
+            "Listening on %s:%d (workers=%d, max_conn=%d, "
+            "idle_timeout=%.1fs).",
+            bound_host,
+            bound_port,
+            db_workers,
+            max_connections,
+            client_timeout,
+        )
+        if stop_event is None:
+            await server.serve_forever()
+        else:
+            await stop_event.wait()
+    finally:
+        server.close()
+        await _shutdown_active_tasks(active_tasks)
+        await server.wait_closed()
+        executor.shutdown(wait=True)
+
+
+async def _shutdown_active_tasks(
+    active_tasks: set[asyncio.Task[Any]],
+) -> None:
+    """Cancel remaining client tasks and wait for their cleanup."""
+    if not active_tasks:
+        return
+    pending = list(active_tasks)
+    log.info("Cancelling %d active client task(s)...", len(pending))
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
 
 
 def handle_request(request: Any, router: Router) -> dict[str, Any]:
@@ -74,47 +150,119 @@ def handle_request(request: Any, router: Router) -> dict[str, Any]:
         return error("Internal server error.", ErrorCode.INTERNAL_ERROR)
 
 
-def serve_client(
-    client_sock: socket.socket,
-    addr: tuple[str, int],
+async def handle_client(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
     router: Router,
-    timeout: float | None = DEFAULT_CLIENT_TIMEOUT,
+    executor: ThreadPoolExecutor | None = None,
+    client_timeout: float = DEFAULT_CLIENT_TIMEOUT,
+    write_timeout: float = DEFAULT_WRITE_TIMEOUT,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> None:
-    """Serve one connected client until it leaves or a fatal error."""
-    with client_sock:
-        client_sock.settimeout(timeout)
-        while True:
-            try:
-                request = receive_message(client_sock)
-            except MalformedMessageError as exc:
-                if not _try_send(client_sock, error(str(exc)), addr):
-                    break
-                continue
-            except MessageTooLargeError as exc:
-                _try_send(client_sock, error(str(exc)), addr)
-                break
-            except ConnectionError:
-                break
-            except socket.timeout:
-                log.warning("Client %s timed out; closing.", addr)
-                break
-            except OSError as exc:
-                log.warning("Socket error with %s: %s", addr, exc)
-                break
+    """Serve one connected client with bounded lifetime and fault isolation."""
+    peer = writer.get_extra_info("peername")
+    if semaphore is not None and semaphore.locked():
+        log.warning("Max connections reached; rejecting %s", peer)
+        await _close_writer(writer)
+        return
 
-            log.debug("Request from %s: %s", addr, request)
-            response = handle_request(request, router)
-            if not _try_send(client_sock, response, addr):
-                break
-
-
-def _try_send(
-    sock: socket.socket, response: dict[str, Any], addr: tuple[str, int]
-) -> bool:
-    """Send *response*; return False if the connection is unusable."""
     try:
-        send_message(sock, response)
+        if semaphore is None:
+            await _serve_session(
+                reader, writer, router, executor, client_timeout, write_timeout
+            )
+        else:
+            async with semaphore:
+                await _serve_session(
+                    reader,
+                    writer,
+                    router,
+                    executor,
+                    client_timeout,
+                    write_timeout,
+                )
+    except Exception:  # noqa: BLE001 - isolate per-client failures
+        log.exception("Unhandled error while serving client %s", peer)
+    finally:
+        await _close_writer(writer)
+        log.info("Client disconnected: %s", peer)
+
+
+async def _serve_session(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    router: Router,
+    executor: ThreadPoolExecutor | None,
+    client_timeout: float,
+    write_timeout: float,
+) -> None:
+    """Run the request/response loop for an admitted client."""
+    peer = writer.get_extra_info("peername")
+    loop = asyncio.get_running_loop()
+    log.info("Client connected: %s", peer)
+
+    while True:
+        try:
+            request = await asyncio.wait_for(
+                read_message(reader), timeout=client_timeout
+            )
+        except TimeoutError:
+            log.info(
+                "Client %s timed out after %.1fs of inactivity",
+                peer,
+                client_timeout,
+            )
+            break
+        except MalformedMessageError as exc:
+            err_resp = error(str(exc))
+            if not await _try_write(writer, err_resp, peer, write_timeout):
+                break
+            continue
+        except MessageTooLargeError as exc:
+            await _try_write(writer, error(str(exc)), peer, write_timeout)
+            break
+        except ConnectionError:
+            break
+
+        log.debug("Request from %s: %s", peer, request)
+        response = await loop.run_in_executor(
+            executor, handle_request, request, router
+        )
+        if not await _try_write(writer, response, peer, write_timeout):
+            break
+
+
+async def _try_write(
+    writer: asyncio.StreamWriter,
+    response: dict[str, Any],
+    peer: Any,
+    write_timeout: float = DEFAULT_WRITE_TIMEOUT,
+) -> bool:
+    """Write *response* within *write_timeout*; return False on failure."""
+    try:
+        await asyncio.wait_for(
+            write_message(writer, response), timeout=write_timeout
+        )
+    except TimeoutError:
+        log.warning(
+            "Write timeout (%.1fs) sending response to %s",
+            write_timeout,
+            peer,
+        )
+        return False
     except OSError as exc:
-        log.warning("Failed to send response to %s: %s", addr, exc)
+        log.warning("Failed to send response to %s: %s", peer, exc)
         return False
     return True
+
+
+async def _close_writer(writer: asyncio.StreamWriter) -> None:
+    """Close *writer* gracefully without hanging on dead peers."""
+    if not writer.is_closing():
+        writer.close()
+    try:
+        await asyncio.wait_for(
+            writer.wait_closed(), timeout=DEFAULT_CLOSE_TIMEOUT
+        )
+    except (OSError, TimeoutError):
+        pass

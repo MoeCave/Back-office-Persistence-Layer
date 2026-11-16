@@ -23,6 +23,7 @@ The full specification lives in ``docs/PROTOCOL.md``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import struct
@@ -78,14 +79,49 @@ class MessageTooLargeError(ValueError):
     """
 
 
-# -- Low-level framing -------------------------------------------------
+# -- Pure framing helpers (Sans-I/O) -----------------------------------
+
+
+def encode_message(data: dict[str, Any]) -> bytes:
+    """Serialise *data* to UTF-8 JSON and prepend its 4-byte length."""
+    payload = json.dumps(data, default=str).encode("utf-8")
+    header = struct.pack(HEADER_FORMAT, len(payload))
+    return header + payload
+
+
+def decode_header(raw_header: bytes) -> int:
+    """Unpack the 4-byte frame header and enforce ``MAX_MESSAGE_BYTES``.
+
+    Raises:
+        MessageTooLargeError: the declared length exceeds the safety cap.
+    """
+    (length,) = struct.unpack(HEADER_FORMAT, raw_header)
+    if length > MAX_MESSAGE_BYTES:
+        raise MessageTooLargeError(
+            f"Incoming message length {length} exceeds limit "
+            f"{MAX_MESSAGE_BYTES}."
+        )
+    return length
+
+
+def decode_body(raw_body: bytes) -> Any:
+    """Decode a UTF-8 JSON frame body into a Python object.
+
+    Raises:
+        MalformedMessageError: the payload is not valid UTF-8 JSON.
+    """
+    try:
+        return json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MalformedMessageError(f"Malformed JSON body: {exc}") from exc
+
+
+# -- Synchronous socket framing ----------------------------------------
 
 
 def send_message(sock: socket.socket, data: dict[str, Any]) -> None:
     """Serialise *data* to JSON, prefix a length header and send it."""
-    payload = json.dumps(data, default=str).encode("utf-8")
-    header = struct.pack(HEADER_FORMAT, len(payload))
-    sock.sendall(header + payload)
+    sock.sendall(encode_message(data))
 
 
 def receive_message(sock: socket.socket) -> Any:
@@ -97,17 +133,9 @@ def receive_message(sock: socket.socket) -> Any:
         MalformedMessageError: the body is not valid UTF-8 JSON.
     """
     raw_header = _recv_exactly(sock, HEADER_SIZE)
-    (length,) = struct.unpack(HEADER_FORMAT, raw_header)
-    if length > MAX_MESSAGE_BYTES:
-        raise MessageTooLargeError(
-            f"Incoming message length {length} exceeds limit "
-            f"{MAX_MESSAGE_BYTES}."
-        )
+    length = decode_header(raw_header)
     raw_body = _recv_exactly(sock, length)
-    try:
-        return json.loads(raw_body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise MalformedMessageError(f"Malformed JSON body: {exc}") from exc
+    return decode_body(raw_body)
 
 
 def _recv_exactly(sock: socket.socket, size: int) -> bytes:
@@ -119,6 +147,39 @@ def _recv_exactly(sock: socket.socket, size: int) -> bytes:
             raise ConnectionError("Connection closed by remote peer.")
         buffer.extend(chunk)
     return bytes(buffer)
+
+
+# -- Asynchronous stream framing ---------------------------------------
+
+
+async def write_message(
+    writer: asyncio.StreamWriter, data: dict[str, Any]
+) -> None:
+    """Serialise *data* and flush the framed message to *writer*."""
+    writer.write(encode_message(data))
+    await writer.drain()
+
+
+async def read_message(reader: asyncio.StreamReader) -> Any:
+    """Read one framed message from *reader* and return the decoded JSON.
+
+    Raises:
+        ConnectionError: the peer closed the stream before frame end.
+        MessageTooLargeError: the declared length exceeds the limit.
+        MalformedMessageError: the body is not valid UTF-8 JSON.
+    """
+    raw_header = await _read_exactly(reader, HEADER_SIZE)
+    length = decode_header(raw_header)
+    raw_body = await _read_exactly(reader, length)
+    return decode_body(raw_body)
+
+
+async def _read_exactly(reader: asyncio.StreamReader, size: int) -> bytes:
+    """Read exactly *size* bytes from *reader*, translating EOF errors."""
+    try:
+        return await reader.readexactly(size)
+    except asyncio.IncompleteReadError as exc:
+        raise ConnectionError("Connection closed by remote peer.") from exc
 
 
 # -- Response builders -------------------------------------------------

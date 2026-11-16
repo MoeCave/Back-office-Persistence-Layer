@@ -272,3 +272,40 @@ Another process holds the port. Use `python server.py --port 9001`.
 
 **`pytest` finds no tests**
 Run it from the project root; `pyproject.toml` points it to `tests/`.
+
+
+## Servidor TCP Concurrente (`asyncio`)
+
+El servidor admite conexiones concurrentes mediante `asyncio` y un `ThreadPoolExecutor` dedicado para operaciones de base de datos:
+
+```bash
+python server.py --host 127.0.0.1 --port 9000 --workers 10 --max-connections 100 --client-timeout 60 --write-timeout 10
+```
+
+### Cliente asíncrono (`AsyncServerGateway`)
+
+```python
+import asyncio
+from src.client.async_gateway import AsyncServerGateway
+
+
+async def main() -> None:
+    async with AsyncServerGateway("127.0.0.1", 9000) as gw:
+        fighters = await gw.resource("fighters").call("list")
+        print(f"Total luchadores: {len(fighters)}")
+
+
+asyncio.run(main())
+```
+
+### Pruebas y *Benchmark* de Concurrencia
+
+```bash
+# Ejecutar toda la batería de pruebas (síncronas + asyncio + integración ORM)
+pytest -v
+
+# Medir throughput y percentiles de latencia bajo carga concurrente real
+python benchmarks/server_load_benchmark.py --clients 20 --requests 3 --delay 0.10
+```
+
+Para más detalles sobre el diseño interno, diagramas de secuencia y la comparativa con SQLAlchemy 2.0 asíncrono, consulta [`docs/ASYNC_ARCHITECTURE.md`](docs/ASYNC_ARCHITECTURE.md).
