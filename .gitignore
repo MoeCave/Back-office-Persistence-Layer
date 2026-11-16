@@ -2,6 +2,14 @@
 .env
 !.env.example
 
+# Cryptographic material & certificates — NEVER commit private keys
+certs/
+*.key
+*.pem
+*.p12
+*.pfx
+*.csr
+
 # Python
 __pycache__/
 *.py[cod]
