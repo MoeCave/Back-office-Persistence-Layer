@@ -1,4 +1,4 @@
-# Tournament Back-Office — Communication Protocol (v2.0.0)
+﻿# Tournament Back-Office â€” Communication Protocol (v2.0.0)
 
 JSON-based request/response protocol over blocking TCP sockets
 (Python `socket`). The server handles **one client at a time**; further
@@ -27,7 +27,7 @@ framed with a length prefix:
 | Header | 4 bytes, network byte order, unsigned 32-bit length of the body |
 | Body encoding | UTF-8 JSON (non-JSON types such as `datetime` are sent as strings) |
 | Maximum body | 64 MiB (`MAX_MESSAGE_BYTES`) |
-| Pattern | strictly request → response, one response per request, in order |
+| Pattern | strictly request â†’ response, one response per request, in order |
 | Connection | persistent; the client closes it to end the session |
 
 ---
@@ -92,8 +92,8 @@ such as `{"deleted": 3}`. ORM objects are never exposed.
 
 | Action | Payload | Returns |
 |--------|---------|---------|
-| `list` | – | list of fighters |
-| `list_paginated` | `page` (≥1, default 1), `page_size` (1–100, default 10) | `{total, page, page_size, items}` |
+| `list` | â€“ | list of fighters |
+| `list_paginated` | `page` (â‰¥1, default 1), `page_size` (1â€“100, default 10) | `{total, page, page_size, items}` |
 | `get` | **`fighter_id`** | fighter + `medical_record`, `registrations`, `total_matches`, `total_wins` |
 | `create` | **`first_name`**, **`last_name`**, `gender`, `belt_level`, `club_name`, `country`, `email` (unique), `phone`, `birth_date` | created fighter |
 | `update` | **`fighter_id`**, any of the `create` fields | updated fighter |
@@ -109,15 +109,15 @@ such as `{"deleted": 3}`. ORM objects are never exposed.
 
 | Action | Payload | Returns |
 |--------|---------|---------|
-| `list` | – | list |
+| `list` | â€“ | list |
 | `get` | **`tournament_id`** | tournament + `tatamis`, `total_matches`, `total_registrations`, `pending_registrations` |
 | `create` | **`name`**, `location`, `start_date`, `end_date` (not before start), `max_fighters` | created tournament |
 | `update` | **`tournament_id`**, any of the `create` fields | updated tournament |
 | `delete` | **`tournament_id`** | `{"deleted": tournament_id}` |
 | `search_by_name` | `name` | list |
 | `search_by_location` | `location` | list |
-| `list_active` | – | list |
-| `list_upcoming` | – | list |
+| `list_active` | â€“ | list |
+| `list_upcoming` | â€“ | list |
 | `add_tatami` | **`tournament_id`**, **`name`**, `mat_number`, `area_size`, `is_active` | tatami |
 | `list_tatamis` | **`tournament_id`** | list of tatamis |
 
@@ -125,7 +125,7 @@ such as `{"deleted": 3}`. ORM objects are never exposed.
 
 | Action | Payload | Returns |
 |--------|---------|---------|
-| `list` | – | list |
+| `list` | â€“ | list |
 | `get` | **`category_id`** | category + `total_registrations`, `total_matches` |
 | `create` | **`name`**, `belt_level`, `gender`, `weight_min_kg`, `weight_max_kg` | created category |
 | `update` | **`category_id`**, any of the `create` fields | updated category |
@@ -139,7 +139,7 @@ such as `{"deleted": 3}`. ORM objects are never exposed.
 
 | Action | Payload | Returns |
 |--------|---------|---------|
-| `list` | – | list |
+| `list` | â€“ | list |
 | `get` | **`match_id`** | match + `fighters_info` (blue / red / winner names) |
 | `create` | **`tournament_id`**, `category_id`, `blue_fighter_id`, `red_fighter_id`, `winner_id`, `round_number`, `duration_seconds`, `win_method`, `scheduled_time` | created match |
 | `update` | **`match_id`**, `winner_id`, `win_method`, `duration_seconds` | updated match |
@@ -157,7 +157,7 @@ A registration is identified by the composite key
 
 | Action | Payload | Returns |
 |--------|---------|---------|
-| `list` | – | list |
+| `list` | â€“ | list |
 | `get` | the three key fields (required) | registration |
 | `list_by_tournament` | **`tournament_id`** | list |
 | `list_by_fighter` | **`fighter_id`** | list |
@@ -176,7 +176,7 @@ A registration is identified by the composite key
 2. **Layered checks.** (a) framing/JSON, (b) envelope shape
    (`validate_request`), (c) router (resource/action), (d) service
    validation, (e) database constraints.
-3. **Typed errors → `error_code`.** The router converts every exception
+3. **Typed errors â†’ `error_code`.** The router converts every exception
    into the envelope below; the client uses `error_code`, not the
    human-readable text, to decide what to do.
 4. **No leaks.** Unexpected exceptions are logged on the server and the
@@ -189,6 +189,8 @@ A registration is identified by the composite key
 | `UNKNOWN_ACTION` | Action not supported for the resource | typo in `action` |
 | `NOT_FOUND` | Entity does not exist | `get`/`update`/`delete` with an unknown id |
 | `CONFLICT` | Conflicts with existing data | duplicate email, existing registration, FK/unique constraint violated |
+| `AUTH_FAILED` | Mutual PKI authentication failed | missing/expired/untrusted X.509 certificate, SAN hostname mismatch, invalid RSA-PSS signature, handshake timeout, or unencrypted client |
+| `INTEGRITY_ERROR` | Encrypted frame integrity check failed | AES-256-GCM authentication tag mismatch (tampering), replay attack, out-of-order sequence number, or direction reflection |
 | `INTERNAL_ERROR` | Unexpected server failure | bug or database outage (details only in the server log) |
 
 Connection-level behaviour:
@@ -209,26 +211,26 @@ Request / response bodies (framing omitted):
 
 ```jsonc
 // Create
-→ {"resource":"fighters","action":"create",
+â†’ {"resource":"fighters","action":"create",
    "payload":{"first_name":"Ana","last_name":"Lopez","email":"ana@x.com"}}
-← {"success":true,"data":{"fighter_id":1,"first_name":"Ana", "...":"..."},
+â† {"success":true,"data":{"fighter_id":1,"first_name":"Ana", "...":"..."},
    "error":null,"error_code":null}
 
 // Not found
-→ {"resource":"fighters","action":"get","payload":{"fighter_id":99}}
-← {"success":false,"data":null,
+â†’ {"resource":"fighters","action":"get","payload":{"fighter_id":99}}
+â† {"success":false,"data":null,
    "error":"Fighter with id=99 not found.","error_code":"NOT_FOUND"}
 
 // Validation
-→ {"resource":"fighters","action":"create",
+â†’ {"resource":"fighters","action":"create",
    "payload":{"first_name":"B","last_name":"B","birth_date":"31/12/2000"}}
-← {"success":false,"data":null,
+â† {"success":false,"data":null,
    "error":"Field 'birth_date' must be a date like 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM'.",
    "error_code":"VALIDATION_ERROR"}
 
 // Unknown resource
-→ {"resource":"coaches","action":"list"}
-← {"success":false,"data":null,
+â†’ {"resource":"coaches","action":"list"}
+â† {"success":false,"data":null,
    "error":"Unknown resource 'coaches'. Valid resources: [...].",
    "error_code":"BAD_REQUEST"}
 ```
@@ -243,3 +245,4 @@ with socket.create_connection(("127.0.0.1", 9000)) as sock:
     send_message(sock, {"resource": "fighters", "action": "list"})
     print(receive_message(sock))
 ```
+

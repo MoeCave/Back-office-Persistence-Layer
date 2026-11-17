@@ -7,8 +7,10 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 from types import FrameType
 
+from src.common.handshake import ServerSecurityConfig
 from src.domain.db import Session, engine
 from src.server.app import (
     DEFAULT_CLIENT_TIMEOUT,
@@ -63,6 +65,39 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--cert",
+        default=os.getenv("SERVER_CERT_PATH", "certs/server/server.pem"),
+        help=(
+            "Path to server X.509 certificate PEM (default: "
+            "certs/server/server.pem)."
+        ),
+    )
+    parser.add_argument(
+        "--key",
+        default=os.getenv("SERVER_KEY_PATH", "certs/server/server.key"),
+        help=(
+            "Path to server RSA private key PEM (default: "
+            "certs/server/server.key)."
+        ),
+    )
+    parser.add_argument(
+        "--ca",
+        default=os.getenv("CA_CERT_PATH", "certs/ca/ca.pem"),
+        help=(
+            "Path to trusted Root CA certificate PEM (default: "
+            "certs/ca/ca.pem)."
+        ),
+    )
+    parser.add_argument(
+        "--handshake-timeout",
+        type=float,
+        default=10.0,
+        help=(
+            "Maximum seconds allowed for mutual PKI handshake (default: "
+            "10.0)."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default=os.getenv("LOG_LEVEL", "INFO"),
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -99,7 +134,10 @@ def _install_signal_handlers(
             signal.signal(sig, _sync_handler)
 
 
-async def _serve(args: argparse.Namespace) -> None:
+async def _serve(
+    args: argparse.Namespace,
+    security: ServerSecurityConfig,
+) -> None:
     """Configure signal hooks and run the server until stopped."""
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
@@ -114,6 +152,7 @@ async def _serve(args: argparse.Namespace) -> None:
             client_timeout=args.client_timeout,
             max_connections=args.max_connections,
             stop_event=stop_event,
+            security=security,
         )
     finally:
         log.info("Disposing SQLAlchemy connection pool...")
@@ -129,7 +168,18 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     try:
-        asyncio.run(_serve(args))
+        security = ServerSecurityConfig.from_files(
+            cert_path=args.cert,
+            key_path=args.key,
+            ca_path=args.ca,
+            handshake_timeout=args.handshake_timeout,
+        )
+    except Exception as exc:
+        log.error("Failed to load server PKI credentials: %s", exc)
+        sys.exit(2)
+
+    try:
+        asyncio.run(_serve(args, security))
     except KeyboardInterrupt:
         log.info("Interrupted by user; exiting.")
 

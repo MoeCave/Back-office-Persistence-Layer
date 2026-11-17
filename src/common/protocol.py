@@ -1,8 +1,13 @@
 """Wire protocol shared by the TCP client and the TCP server.
 
-Every message (request or response) is framed as::
+Every plain / handshake message is framed as::
 
     <4-byte big-endian unsigned length><UTF-8 JSON payload>
+
+Every post-handshake encrypted message is framed as::
+
+    <4-byte big-endian unsigned length><8-byte uint64 seq><AES-256-GCM
+    ciphertext + 16B tag>
 
 Request envelope::
 
@@ -29,6 +34,8 @@ import socket
 import struct
 from typing import Any
 
+from src.common.crypto import CipherIntegrityError, SessionCipher
+
 # -- Constants ---------------------------------------------------------
 
 DEFAULT_HOST = "127.0.0.1"
@@ -36,7 +43,12 @@ DEFAULT_PORT = 9000
 
 HEADER_FORMAT = "!I"  # network byte order, unsigned 32-bit integer
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+SEQ_FORMAT = "!Q"  # network byte order, unsigned 64-bit sequence counter
+SEQ_SIZE = struct.calcsize(SEQ_FORMAT)
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024  # 64 MiB safety cap
+MAX_HANDSHAKE_BYTES = (
+    64 * 1024
+)  # 64 KiB cap for unauthenticated handshake frames
 
 VALID_RESOURCES = frozenset(
     {
@@ -57,6 +69,8 @@ class ErrorCode:
     UNKNOWN_ACTION = "UNKNOWN_ACTION"
     NOT_FOUND = "NOT_FOUND"
     CONFLICT = "CONFLICT"
+    AUTH_FAILED = "AUTH_FAILED"
+    INTEGRITY_ERROR = "INTEGRITY_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -89,17 +103,18 @@ def encode_message(data: dict[str, Any]) -> bytes:
     return header + payload
 
 
-def decode_header(raw_header: bytes) -> int:
-    """Unpack the 4-byte frame header and enforce ``MAX_MESSAGE_BYTES``.
+def decode_header(
+    raw_header: bytes, max_bytes: int = MAX_MESSAGE_BYTES
+) -> int:
+    """Unpack the 4-byte frame header and enforce *max_bytes*.
 
     Raises:
         MessageTooLargeError: the declared length exceeds the safety cap.
     """
     (length,) = struct.unpack(HEADER_FORMAT, raw_header)
-    if length > MAX_MESSAGE_BYTES:
+    if length > max_bytes:
         raise MessageTooLargeError(
-            f"Incoming message length {length} exceeds limit "
-            f"{MAX_MESSAGE_BYTES}."
+            f"Incoming message length {length} exceeds limit {max_bytes}."
         )
     return length
 
@@ -116,6 +131,36 @@ def decode_body(raw_body: bytes) -> Any:
         raise MalformedMessageError(f"Malformed JSON body: {exc}") from exc
 
 
+def encode_encrypted_message(
+    cipher: SessionCipher, data: dict[str, Any]
+) -> bytes:
+    """Serialise *data* to JSON, encrypt with AES-256-GCM, and frame with
+    seq."""
+    plaintext = json.dumps(data, default=str).encode("utf-8")
+    seq, ciphertext = cipher.encrypt_frame(plaintext)
+    body = struct.pack(SEQ_FORMAT, seq) + ciphertext
+    if len(body) > MAX_MESSAGE_BYTES:
+        raise MessageTooLargeError(
+            f"Encrypted message length {len(body)} exceeds limit "
+            f"{MAX_MESSAGE_BYTES}."
+        )
+    header = struct.pack(HEADER_FORMAT, len(body))
+    return header + body
+
+
+def decode_encrypted_body(cipher: SessionCipher, raw_body: bytes) -> Any:
+    """Verify sequence + GCM tag, decrypt *raw_body*, and parse UTF-8 JSON."""
+    if len(raw_body) <= SEQ_SIZE:
+        raise CipherIntegrityError(
+            f"Encrypted frame too short ({len(raw_body)} bytes) for sequence"
+            f"header."
+        )
+    (seq,) = struct.unpack(SEQ_FORMAT, raw_body[:SEQ_SIZE])
+    ciphertext = raw_body[SEQ_SIZE:]
+    plaintext = cipher.decrypt_frame(seq, ciphertext)
+    return decode_body(plaintext)
+
+
 # -- Synchronous socket framing ----------------------------------------
 
 
@@ -124,7 +169,9 @@ def send_message(sock: socket.socket, data: dict[str, Any]) -> None:
     sock.sendall(encode_message(data))
 
 
-def receive_message(sock: socket.socket) -> Any:
+def receive_message(
+    sock: socket.socket, max_bytes: int = MAX_MESSAGE_BYTES
+) -> Any:
     """Read one framed message from *sock* and return the decoded JSON.
 
     Raises:
@@ -133,9 +180,27 @@ def receive_message(sock: socket.socket) -> Any:
         MalformedMessageError: the body is not valid UTF-8 JSON.
     """
     raw_header = _recv_exactly(sock, HEADER_SIZE)
-    length = decode_header(raw_header)
+    length = decode_header(raw_header, max_bytes=max_bytes)
     raw_body = _recv_exactly(sock, length)
     return decode_body(raw_body)
+
+
+def send_encrypted_message(
+    sock: socket.socket, cipher: SessionCipher, data: dict[str, Any]
+) -> None:
+    """Encrypt *data* with AES-256-GCM and send one framed message to
+    *sock*."""
+    sock.sendall(encode_encrypted_message(cipher, data))
+
+
+def receive_encrypted_message(
+    sock: socket.socket, cipher: SessionCipher
+) -> Any:
+    """Read and decrypt one AES-256-GCM framed message from *sock*."""
+    raw_header = _recv_exactly(sock, HEADER_SIZE)
+    length = decode_header(raw_header)
+    raw_body = _recv_exactly(sock, length)
+    return decode_encrypted_body(cipher, raw_body)
 
 
 def _recv_exactly(sock: socket.socket, size: int) -> bytes:
@@ -160,7 +225,9 @@ async def write_message(
     await writer.drain()
 
 
-async def read_message(reader: asyncio.StreamReader) -> Any:
+async def read_message(
+    reader: asyncio.StreamReader, max_bytes: int = MAX_MESSAGE_BYTES
+) -> Any:
     """Read one framed message from *reader* and return the decoded JSON.
 
     Raises:
@@ -169,9 +236,28 @@ async def read_message(reader: asyncio.StreamReader) -> Any:
         MalformedMessageError: the body is not valid UTF-8 JSON.
     """
     raw_header = await _read_exactly(reader, HEADER_SIZE)
-    length = decode_header(raw_header)
+    length = decode_header(raw_header, max_bytes=max_bytes)
     raw_body = await _read_exactly(reader, length)
     return decode_body(raw_body)
+
+
+async def write_encrypted_message(
+    writer: asyncio.StreamWriter, cipher: SessionCipher, data: dict[str, Any]
+) -> None:
+    """Encrypt *data* with AES-256-GCM and flush the framed message to
+    *writer*."""
+    writer.write(encode_encrypted_message(cipher, data))
+    await writer.drain()
+
+
+async def read_encrypted_message(
+    reader: asyncio.StreamReader, cipher: SessionCipher
+) -> Any:
+    """Read and decrypt one AES-256-GCM framed message from *reader*."""
+    raw_header = await _read_exactly(reader, HEADER_SIZE)
+    length = decode_header(raw_header)
+    raw_body = await _read_exactly(reader, length)
+    return decode_encrypted_body(cipher, raw_body)
 
 
 async def _read_exactly(reader: asyncio.StreamReader, size: int) -> bytes:

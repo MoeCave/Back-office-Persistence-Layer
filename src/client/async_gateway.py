@@ -2,6 +2,10 @@
 
 Provides :class:`AsyncServerGateway` for issuing concurrent framed JSON
 requests against the TCP server without blocking an event loop.
+
+When a :class:`~src.common.handshake.ClientSecurityConfig` is supplied,
+``connect()`` performs mutual X.509 certificate authentication and
+establishes an AES-256-GCM encrypted session channel.
 """
 
 from __future__ import annotations
@@ -10,11 +14,19 @@ import asyncio
 from types import TracebackType
 from typing import Any
 
+from src.common.crypto import CipherIntegrityError, SessionCipher
+from src.common.handshake import (
+    AuthenticatedSession,
+    ClientSecurityConfig,
+    perform_client_handshake_async,
+)
 from src.common.protocol import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     ErrorCode,
+    read_encrypted_message,
     read_message,
+    write_encrypted_message,
     write_message,
 )
 
@@ -57,7 +69,7 @@ class AsyncResourceProxy:
 
 class AsyncServerGateway:
     """Async context-managed TCP client speaking the length-prefixed JSON
-    wire protocol.
+    wire protocol (optionally protected with mutual PKI + AES-256-GCM).
     """
 
     def __init__(
@@ -66,13 +78,17 @@ class AsyncServerGateway:
         port: int = DEFAULT_PORT,
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
         request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
+        security: ClientSecurityConfig | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.connect_timeout = connect_timeout
         self.request_timeout = request_timeout
+        self.security = security
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        self._session: AuthenticatedSession | None = None
+        self._cipher: SessionCipher | None = None
         self._lock = asyncio.Lock()
 
     @property
@@ -80,18 +96,45 @@ class AsyncServerGateway:
         """Return ``True`` while an open TCP stream is held."""
         return self._writer is not None and not self._writer.is_closing()
 
+    @property
+    def session(self) -> AuthenticatedSession | None:
+        """Return the authenticated session metadata when security is
+        enabled."""
+        return self._session
+
     def resource(self, name: str) -> AsyncResourceProxy:
         """Return an :class:`AsyncResourceProxy` for *name*."""
         return AsyncResourceProxy(self, name)
 
     async def connect(self) -> None:
-        """Open the TCP connection to ``(self.host, self.port)``."""
+        """Open the TCP connection and perform optional mutual handshake."""
         if self.is_connected:
             return
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(self.host, self.port),
             timeout=self.connect_timeout,
         )
+        try:
+            if self.security is not None:
+                session = await perform_client_handshake_async(
+                    reader, writer, self.security
+                )
+                self._session = session
+                self._cipher = session.cipher
+            else:
+                self._session = None
+                self._cipher = None
+        except Exception:
+            if not writer.is_closing():
+                writer.close()
+            try:
+                await asyncio.wait_for(writer.wait_closed(), timeout=5.0)
+            except (OSError, TimeoutError):
+                pass
+            self._session = None
+            self._cipher = None
+            raise
+
         self._reader = reader
         self._writer = writer
 
@@ -100,6 +143,8 @@ class AsyncServerGateway:
         writer = self._writer
         self._reader = None
         self._writer = None
+        self._session = None
+        self._cipher = None
         if writer is None:
             return
         if not writer.is_closing():
@@ -141,15 +186,33 @@ class AsyncServerGateway:
             "action": action,
             "payload": payload or {},
         }
-        async with self._lock:
-            await asyncio.wait_for(
-                write_message(self._writer, envelope),
-                timeout=self.request_timeout,
-            )
-            response = await asyncio.wait_for(
-                read_message(self._reader),
-                timeout=self.request_timeout,
-            )
+        try:
+            async with self._lock:
+                if self._cipher is not None:
+                    await asyncio.wait_for(
+                        write_encrypted_message(
+                            self._writer, self._cipher, envelope
+                        ),
+                        timeout=self.request_timeout,
+                    )
+                    response = await asyncio.wait_for(
+                        read_encrypted_message(self._reader, self._cipher),
+                        timeout=self.request_timeout,
+                    )
+                else:
+                    await asyncio.wait_for(
+                        write_message(self._writer, envelope),
+                        timeout=self.request_timeout,
+                    )
+                    response = await asyncio.wait_for(
+                        read_message(self._reader),
+                        timeout=self.request_timeout,
+                    )
+        except CipherIntegrityError as exc:
+            raise AsyncServerError(
+                f"Encrypted frame integrity check failed: {exc}",
+                ErrorCode.INTEGRITY_ERROR,
+            ) from exc
 
         if not isinstance(response, dict):
             raise AsyncServerError(

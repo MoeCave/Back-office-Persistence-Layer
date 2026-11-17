@@ -5,16 +5,26 @@ The server accepts multiple concurrent TCP connections via
 offloads synchronous routing and database work to a bounded
 :class:`~concurrent.futures.ThreadPoolExecutor`, and replies
 asynchronously.
+
+When a :class:`~src.common.handshake.ServerSecurityConfig` is supplied,
+each connection performs mutual X.509 certificate authentication and
+establishes an AES-256-GCM encrypted session channel before any
+application request is accepted.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from typing import Any
-from collections.abc import Callable
 
+from src.common.crypto import CipherIntegrityError, CryptoError, SessionCipher
+from src.common.handshake import (
+    ServerSecurityConfig,
+    perform_server_handshake_async,
+)
 from src.common.protocol import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -22,8 +32,10 @@ from src.common.protocol import (
     MalformedMessageError,
     MessageTooLargeError,
     error,
+    read_encrypted_message,
     read_message,
     validate_request,
+    write_encrypted_message,
     write_message,
 )
 from src.server.router import Router
@@ -63,6 +75,7 @@ async def run_server(
     max_connections: int = DEFAULT_MAX_CONNECTIONS,
     stop_event: asyncio.Event | None = None,
     on_started: Callable[[str, int], None] | None = None,
+    security: ServerSecurityConfig | None = None,
 ) -> None:
     """Start the asyncio TCP server and serve until stopped or cancelled."""
     router = Router(session_factory)
@@ -85,6 +98,7 @@ async def run_server(
                 client_timeout=client_timeout,
                 write_timeout=write_timeout,
                 semaphore=semaphore,
+                security=security,
             )
         )
         active_tasks.add(task)
@@ -105,11 +119,17 @@ async def run_server(
         else:
             bound_host, bound_port = host, port
 
+        mode_label = (
+            "secure (mutual X.509 + AES-256-GCM)"
+            if security is not None
+            else "plaintext"
+        )
         log.info(
-            "Listening on %s:%d (workers=%d, max_conn=%d, "
+            "Listening on %s:%d [%s] (workers=%d, max_conn=%d, "
             "idle_timeout=%.1fs).",
             bound_host,
             bound_port,
+            mode_label,
             db_workers,
             max_connections,
             client_timeout,
@@ -158,6 +178,7 @@ async def handle_client(
     client_timeout: float = DEFAULT_CLIENT_TIMEOUT,
     write_timeout: float = DEFAULT_WRITE_TIMEOUT,
     semaphore: asyncio.Semaphore | None = None,
+    security: ServerSecurityConfig | None = None,
 ) -> None:
     """Serve one connected client with bounded lifetime and fault isolation."""
     peer = writer.get_extra_info("peername")
@@ -169,7 +190,13 @@ async def handle_client(
     try:
         if semaphore is None:
             await _serve_session(
-                reader, writer, router, executor, client_timeout, write_timeout
+                reader,
+                writer,
+                router,
+                executor,
+                client_timeout,
+                write_timeout,
+                security=security,
             )
         else:
             async with semaphore:
@@ -180,6 +207,7 @@ async def handle_client(
                     executor,
                     client_timeout,
                     write_timeout,
+                    security=security,
                 )
     except Exception:  # noqa: BLE001 - isolate per-client failures
         log.exception("Unhandled error while serving client %s", peer)
@@ -195,17 +223,69 @@ async def _serve_session(
     executor: ThreadPoolExecutor | None,
     client_timeout: float,
     write_timeout: float,
+    security: ServerSecurityConfig | None = None,
 ) -> None:
-    """Run the request/response loop for an admitted client."""
+    """Run the optional mutual handshake and request/response loop."""
     peer = writer.get_extra_info("peername")
     loop = asyncio.get_running_loop()
     log.info("Client connected: %s", peer)
+    cipher: SessionCipher | None = None
+
+    if security is not None:
+        try:
+            session = await perform_server_handshake_async(
+                reader,
+                writer,
+                security,
+                executor=executor,
+            )
+            cipher = session.cipher
+            log.info(
+                "Mutual handshake succeeded with %s (CN=%r, fp=%s...)",
+                peer,
+                session.peer_common_name,
+                session.peer_fingerprint_sha256[:16],
+            )
+        except TimeoutError:
+            log.warning("Handshake timed out for %s", peer)
+            await _try_write(
+                writer,
+                error("Handshake timed out.", ErrorCode.AUTH_FAILED),
+                peer,
+                write_timeout,
+            )
+            return
+        except (
+            CryptoError,
+            MalformedMessageError,
+            MessageTooLargeError,
+        ) as exc:
+            log.warning("Handshake rejected for %s: %s", peer, exc)
+            await _try_write(
+                writer,
+                error(
+                    f"Mutual authentication failed: {exc}",
+                    ErrorCode.AUTH_FAILED,
+                ),
+                peer,
+                write_timeout,
+            )
+            return
+        except ConnectionError:
+            log.info("Client %s disconnected during handshake", peer)
+            return
 
     while True:
         try:
-            request = await asyncio.wait_for(
-                read_message(reader), timeout=client_timeout
-            )
+            if cipher is not None:
+                request = await asyncio.wait_for(
+                    read_encrypted_message(reader, cipher),
+                    timeout=client_timeout,
+                )
+            else:
+                request = await asyncio.wait_for(
+                    read_message(reader), timeout=client_timeout
+                )
         except TimeoutError:
             log.info(
                 "Client %s timed out after %.1fs of inactivity",
@@ -213,13 +293,30 @@ async def _serve_session(
                 client_timeout,
             )
             break
+        except CipherIntegrityError as exc:
+            log.warning("Cipher integrity failure from %s: %s", peer, exc)
+            await _try_write(
+                writer,
+                error(
+                    f"Encrypted frame integrity check failed: {exc}",
+                    ErrorCode.INTEGRITY_ERROR,
+                ),
+                peer,
+                write_timeout,
+                cipher=cipher,
+            )
+            break
         except MalformedMessageError as exc:
             err_resp = error(str(exc))
-            if not await _try_write(writer, err_resp, peer, write_timeout):
+            if not await _try_write(
+                writer, err_resp, peer, write_timeout, cipher=cipher
+            ):
                 break
             continue
         except MessageTooLargeError as exc:
-            await _try_write(writer, error(str(exc)), peer, write_timeout)
+            await _try_write(
+                writer, error(str(exc)), peer, write_timeout, cipher=cipher
+            )
             break
         except ConnectionError:
             break
@@ -228,7 +325,9 @@ async def _serve_session(
         response = await loop.run_in_executor(
             executor, handle_request, request, router
         )
-        if not await _try_write(writer, response, peer, write_timeout):
+        if not await _try_write(
+            writer, response, peer, write_timeout, cipher=cipher
+        ):
             break
 
 
@@ -237,12 +336,16 @@ async def _try_write(
     response: dict[str, Any],
     peer: Any,
     write_timeout: float = DEFAULT_WRITE_TIMEOUT,
+    cipher: SessionCipher | None = None,
 ) -> bool:
     """Write *response* within *write_timeout*; return False on failure."""
     try:
-        await asyncio.wait_for(
-            write_message(writer, response), timeout=write_timeout
+        coro = (
+            write_encrypted_message(writer, cipher, response)
+            if cipher is not None
+            else write_message(writer, response)
         )
+        await asyncio.wait_for(coro, timeout=write_timeout)
     except TimeoutError:
         log.warning(
             "Write timeout (%.1fs) sending response to %s",

@@ -1,12 +1,13 @@
-"""
-client/gateway.py — TCP gateway used by all client-side menus.
+﻿"""
+client/gateway.py â€” TCP gateway used by all client-side menus.
 
 The ServerGateway replaces direct UnitOfWork calls on the client side.
 It wraps the protocol framing and exposes typed methods that mirror the
 server-side service interface.
 
-All methods raise ServerError on protocol-level failures and ValueError
-when the server reports a domain error (success=false).
+When a :class:`~src.common.handshake.ClientSecurityConfig` is supplied,
+``connect()`` performs mutual X.509 certificate authentication and all
+subsequent requests/responses are encrypted with AES-256-GCM.
 """
 
 from __future__ import annotations
@@ -14,11 +15,21 @@ from __future__ import annotations
 import socket
 from typing import Any
 
+from src.common.crypto import CipherIntegrityError, CryptoError, SessionCipher
+from src.common.handshake import (
+    AuthenticatedSession,
+    ClientSecurityConfig,
+    perform_client_handshake_sync,
+)
 from src.common.protocol import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     ErrorCode,
+    MalformedMessageError,
+    MessageTooLargeError,
+    receive_encrypted_message,
     receive_message,
+    send_encrypted_message,
     send_message,
 )
 
@@ -37,7 +48,7 @@ class ServerError(Exception):
 
 
 class ConnectionFailedError(Exception):
-    """Raised when the TCP connection to the server cannot be established."""
+    """Raised when the TCP connection or mutual handshake fails."""
 
 
 class ServerGateway:
@@ -58,10 +69,14 @@ class ServerGateway:
         self,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
+        security: ClientSecurityConfig | None = None,
     ) -> None:
         self._host = host
         self._port = port
+        self._security = security
         self._sock: socket.socket | None = None
+        self._session: AuthenticatedSession | None = None
+        self._cipher: SessionCipher | None = None
 
         # Sub-namespaces (populated after connect)
         self.fighters: _FighterProxy
@@ -70,18 +85,47 @@ class ServerGateway:
         self.matches: _MatchProxy
         self.registrations: _RegistrationProxy
 
-    # ── Lifecycle ────────────────────────────────────────────────────────────
+    @property
+    def session(self) -> AuthenticatedSession | None:
+        """Return the authenticated session metadata when security is
+        enabled."""
+        return self._session
+
+    # -- Lifecycle --------------------------------------------------------
 
     def connect(self) -> None:
-        """Open a blocking TCP connection to the server."""
+        """Open a blocking TCP connection and perform optional mutual
+        handshake."""
+        sock: socket.socket | None = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((self._host, self._port))
+            if self._security is not None:
+                session = perform_client_handshake_sync(sock, self._security)
+                self._session = session
+                self._cipher = session.cipher
+            else:
+                self._session = None
+                self._cipher = None
             self._sock = sock
-        except OSError as exc:
+        except (
+            OSError,
+            CryptoError,
+            MalformedMessageError,
+            MessageTooLargeError,
+            ConnectionError,
+        ) as exc:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            self._sock = None
+            self._session = None
+            self._cipher = None
             raise ConnectionFailedError(
-                f"Cannot connect to server at {self._host}:{self._port}. "
-                f"Is the server running? ({exc})"
+                f"Cannot connect to server at {self._host}:{self._port}. Is "
+                f"the server running? ({exc})"
             ) from exc
 
         self.fighters = _FighterProxy(self)
@@ -98,6 +142,8 @@ class ServerGateway:
             except OSError:
                 pass
             self._sock = None
+        self._session = None
+        self._cipher = None
 
     def __enter__(self) -> "ServerGateway":
         self.connect()
@@ -106,7 +152,7 @@ class ServerGateway:
     def __exit__(self, *_) -> None:
         self.close()
 
-    # ── Raw request ──────────────────────────────────────────────────────────
+    # -- Raw request ------------------------------------------------------
 
     def request(
         self,
@@ -117,7 +163,8 @@ class ServerGateway:
         """Send one request and return the data field on success.
 
         Raises:
-            ServerError:          server returned success=false.
+            ServerError:          server returned success=false or integrity
+            failed.
             ConnectionFailedError: socket is not open.
             ConnectionError:      connection dropped mid-request.
         """
@@ -129,8 +176,18 @@ class ServerGateway:
             "action": action,
             "payload": payload or {},
         }
-        send_message(self._sock, envelope)
-        response = receive_message(self._sock)
+        try:
+            if self._cipher is not None:
+                send_encrypted_message(self._sock, self._cipher, envelope)
+                response = receive_encrypted_message(self._sock, self._cipher)
+            else:
+                send_message(self._sock, envelope)
+                response = receive_message(self._sock)
+        except CipherIntegrityError as exc:
+            raise ServerError(
+                f"Encrypted frame integrity check failed: {exc}",
+                ErrorCode.INTEGRITY_ERROR,
+            ) from exc
 
         if not response.get("success"):
             raise ServerError(
@@ -157,7 +214,7 @@ class ServerGateway:
             raise
 
 
-# ── Resource proxies (one per domain entity) ─────────────────────────────────
+# -- Resource proxies (one per domain entity) ------------------------
 
 
 class _FighterProxy:
