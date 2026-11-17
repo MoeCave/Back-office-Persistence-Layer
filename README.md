@@ -2,28 +2,35 @@
 ## TCP client/server · SQLAlchemy persistence · Alembic
 
 The back-office (CRUD for fighters, tournaments, categories, matches and
-registrations) is split into two independent programs that talk over
-blocking TCP sockets (`socket` from the standard library):
+registrations) is split into two independent programs that talk over TCP.
+The client uses blocking sockets (`socket` from the standard library); the
+server is built on `asyncio` and serves **many clients concurrently**.
+Every connection is protected by **mutual X.509 certificate authentication**
+and an **AES-256-GCM** encrypted session (see [docs/SECURITY.md](docs/SECURITY.md)):
 
 | Program | Entry point | Responsibility |
 |---------|-------------|----------------|
-| **Server** | `python server.py` | Listens on a port, serves **one client at a time**, routes requests to services, accesses the database through repositories |
-| **Client** | `python client.py` | Connects to the server, sends requests and shows results in a Rich console UI. It never imports SQLAlchemy or the domain layer |
+| **Server** | `python server.py` | Listens on a port, serves **many concurrent clients** (`asyncio`), authenticates each one with its certificate, routes requests to services, accesses the database through repositories |
+| **Client** | `python client.py` | Connects to the server, authenticates with its certificate, sends requests and shows results in a Rich console UI. It never imports SQLAlchemy or the domain layer |
 
-The communication protocol (framing, request/response format, every
-supported operation and the error strategy) is documented in
-**[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
+The communication protocol (framing, handshake, encrypted frames,
+request/response format, every supported operation and the error strategy)
+is documented in **[docs/PROTOCOL.md](docs/PROTOCOL.md)**. The concurrency
+model is in [docs/ASYNC_ARCHITECTURE.md](docs/ASYNC_ARCHITECTURE.md).
 
 ```
  client.py ──► src/client (menus, gateway)
-                   │  JSON frames over TCP  (src/common/protocol.py)
+                   │  1. mutual X.509 handshake (M1→M4, src/common/handshake.py)
+                   │  2. AES-256-GCM frames over TCP  (src/common/protocol.py)
                    ▼
- server.py ──► src/server/app.py        accept loop, one client at a time
-                   └► router.py + routes.py   (resource, action) → handler
-                         └► services/*        validation + business rules
-                               └► converters.py / dto.py   ORM → DTO dicts
-                                     └► src/domain (models, repositories,
-                                                    UnitOfWork) → database
+ server.py ──► src/server/app.py        asyncio accept loop, N concurrent clients
+                   │  handshake + decrypt (event loop)
+                   └► ThreadPoolExecutor (db-worker-*)
+                         └► router.py + routes.py   (resource, action) → handler
+                               └► services/*        validation + business rules
+                                     └► converters.py / dto.py   ORM → DTO dicts
+                                           └► src/domain (models, repositories,
+                                                          UnitOfWork) → database
 ```
 
 ---
@@ -34,17 +41,22 @@ supported operation and the error strategy) is documented in
 Back-office-Persistence-Layer/
 ├── client.py                    ← TCP client entry point
 ├── server.py                    ← TCP server entry point
-├── docs/PROTOCOL.md             ← protocol documentation
+├── docs/PROTOCOL.md             ← protocol documentation (framing + handshake)
+├── docs/SECURITY.md             ← PKI, handshake and AES-GCM design
+├── docs/ASYNC_ARCHITECTURE.md   ← asyncio + thread-pool design, diagrams
+├── scripts/gen_certs.py         ← generates CA, server and client certificates
 ├── alembic/ …                   ← migrations (001 initial, 002 last_update)
-├── tests/                       ← pytest suite (no external services)
+├── tests/                       ← pytest suite (no external services, ~295 tests)
 ├── verify.py                    ← offline sanity check of the setup
 └── src/
     ├── common/protocol.py       ← framing, envelopes, validation (shared)
+    ├── common/handshake.py      ← mutual authentication handshake (M1→M4)
+    ├── common/crypto.py         ← certificate validation, RSA-PSS/OAEP, AES-GCM
     ├── client/
     │   ├── gateway.py           ← ServerGateway + resource proxies
     │   └── ui/                  ← Rich console menus and helpers
     ├── server/
-    │   ├── app.py               ← blocking TCP server loop
+    │   ├── app.py               ← asyncio TCP server (concurrent clients)
     │   ├── router.py            ← dispatch + exception → error response
     │   ├── routes.py            ← declarative (resource, action) table
     │   ├── errors.py            ← NotFound / Validation / Conflict errors
@@ -128,7 +140,21 @@ Running upgrade  -> 001_initial_schema, Initial schema creation
 Running upgrade 001_initial_schema -> 002_add_last_update, Added last_update attribute
 ```
 
-### 7. Verify the setup (optional)
+### 7. Generate the certificates (required)
+
+The server **rejects any client without a valid certificate**, and the
+`certs/` folder is git-ignored (private keys are never committed), so
+generate the PKI once after cloning:
+
+```bash
+python scripts/gen_certs.py            # add --force to regenerate
+```
+
+It creates, under `certs/`: a Root CA (`ca/`), the server certificate
+(`server/`), two client certificates (`client1/`, `client2/`) and two
+negative-test clients (`test_invalid/`: untrusted CA and expired).
+
+### 8. Verify the setup (optional)
 
 ```bash
 python verify.py
@@ -150,9 +176,11 @@ source .venv/bin/activate
 
 # 2. Terminal 1 — server (APP_ENV=test uses SQLite, no Docker needed)
 python server.py                    # --host 127.0.0.1 --port 9000
+                                    # uses certs/server/* and certs/ca/ca.pem
 
-# 3. Terminal 2 — client
-python client.py                    # --host 127.0.0.1 --port 9000
+# 3. Terminal 2 — client (one terminal per client, any number of them)
+python client.py                    # uses certs/client1/*
+python client.py --cert certs/client2/client2.pem --key certs/client2/client2.key
 
 # Run the unit tests (SQLite in memory, sockets mocked / loopback)
 pytest
@@ -267,6 +295,15 @@ The server is not running or uses another port. Start it with
 `python server.py` (add `APP_ENV=test` to use SQLite) and pass the same
 `--port` to the client.
 
+**`Failed to load server PKI credentials`** / **`Failed to load client PKI credentials`**
+The certificates have not been generated. Run `python scripts/gen_certs.py`
+from the project root (see step 7).
+
+**`Server rejected handshake [AUTH_FAILED]`** (client)
+The client certificate is expired, was not issued by the CA the server
+trusts, or the files do not match. Regenerate with
+`python scripts/gen_certs.py --force` and restart **both** programs.
+
 **`Address already in use`** (server)
 Another process holds the port. Use `python server.py --port 9001`.
 
@@ -276,21 +313,38 @@ Run it from the project root; `pyproject.toml` points it to `tests/`.
 
 ## Servidor TCP Concurrente (`asyncio`)
 
-El servidor admite conexiones concurrentes mediante `asyncio` y un `ThreadPoolExecutor` dedicado para operaciones de base de datos:
+El servidor admite conexiones concurrentes mediante `asyncio` y un `ThreadPoolExecutor` dedicado para operaciones de base de datos. Cada conexión pasa primero por el *handshake* de autenticación mutua con certificados y después intercambia tramas cifradas con AES-256-GCM:
 
 ```bash
-python server.py --host 127.0.0.1 --port 9000 --workers 10 --max-connections 100 --client-timeout 60 --write-timeout 10
+python server.py --host 127.0.0.1 --port 9000 --workers 10 --max-connections 100 --client-timeout 60 --handshake-timeout 10
 ```
+
+| Opción | Defecto | Descripción |
+|--------|---------|-------------|
+| `--workers` | 10 | Hilos del pool de base de datos |
+| `--max-connections` | 100 | Conexiones simultáneas máximas |
+| `--client-timeout` | 900 s | Inactividad máxima de un cliente |
+| `--handshake-timeout` | 10 s | Tiempo máximo del handshake PKI |
+| `--cert` / `--key` / `--ca` | `certs/server/server.{pem,key}`, `certs/ca/ca.pem` | Credenciales PKI del servidor |
 
 ### Cliente asíncrono (`AsyncServerGateway`)
 
 ```python
 import asyncio
+
 from src.client.async_gateway import AsyncServerGateway
+from src.common.handshake import ClientSecurityConfig
 
 
 async def main() -> None:
-    async with AsyncServerGateway("127.0.0.1", 9000) as gw:
+    security = ClientSecurityConfig.from_files(
+        cert_path="certs/client1/client1.pem",
+        key_path="certs/client1/client1.key",
+        ca_path="certs/ca/ca.pem",
+    )
+    async with AsyncServerGateway(
+        "127.0.0.1", 9000, security=security
+    ) as gw:
         fighters = await gw.resource("fighters").call("list")
         print(f"Total luchadores: {len(fighters)}")
 
@@ -298,14 +352,21 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+### Seguridad: demostración y pruebas
+
+```bash
+# Captura de tráfico (sin texto plano), rechazo de certificados falsos/caducados y benchmark
+PYTHONPATH=. python scripts/audit_security_demo.py
+```
+
 ### Pruebas y *Benchmark* de Concurrencia
 
 ```bash
-# Ejecutar toda la batería de pruebas (síncronas + asyncio + integración ORM)
+# Ejecutar toda la batería de pruebas (síncronas + asyncio + seguridad + integración ORM)
 pytest -v
 
 # Medir throughput y percentiles de latencia bajo carga concurrente real
 python benchmarks/server_load_benchmark.py --clients 20 --requests 3 --delay 0.10
 ```
 
-Para más detalles sobre el diseño interno, diagramas de secuencia y la comparativa con SQLAlchemy 2.0 asíncrono, consulta [`docs/ASYNC_ARCHITECTURE.md`](docs/ASYNC_ARCHITECTURE.md).
+Más detalles: diseño interno y comparativa con SQLAlchemy 2.0 asíncrono en [`docs/ASYNC_ARCHITECTURE.md`](docs/ASYNC_ARCHITECTURE.md); criptografía en [`docs/SECURITY.md`](docs/SECURITY.md); formato de mensajes en [`docs/PROTOCOL.md`](docs/PROTOCOL.md).

@@ -8,18 +8,22 @@ El servidor TCP (`server.py` / `src/server/app.py`) utiliza un modelo híbrido e
 2. **Capa de persistencia aislada (`ThreadPoolExecutor`):** Cada petición válida se delega mediante `loop.run_in_executor(executor, handle_request, envelope, router)` a un *pool* dedicado de hilos (`db-worker-*`), evitando que las consultas a base de datos o la serialización de DTOs congelen al resto de clientes conectados.
 
 ```text
-Clientes TCP (N conexiones simultáneas)
-  ├── client.py (ServerGateway síncrono)
+Clientes TCP (N conexiones simultáneas, cada uno con su certificado X.509)
+  ├── client.py (ServerGateway síncrono, sockets bloqueantes)
   └── AsyncServerGateway (asyncio)
          │
-         ▼  [ Trama: 4B uint32 BE (!I) + JSON UTF-8 ]
+         ▼  Fase 1 — Handshake mutuo M1→M4 (tramas !I + JSON, ≤ 64 KiB)
+         ▼  Fase 2 — Sesión: [ !I | seq (!Q) | AES-256-GCM(JSON) + tag ]
 ┌─────────────────────────────────────────────────────────────────┐
 │ Event Loop (asyncio - Hilo Principal)                           │
 │  1. asyncio.start_server -> _on_connect()                       │
 │  2. asyncio.Semaphore(max_connections)  [Control de admisión]   │
-│  3. asyncio.wait_for(read_message, client_timeout)              │
-│  4. loop.run_in_executor(executor, handle_request, ...)         │
-│  5. asyncio.wait_for(write_message, write_timeout)              │
+│  3. perform_server_handshake_async  [timeout: handshake_timeout]│
+│       valida certificado vs CA, firma RSA-PSS, clave RSA-OAEP   │
+│       (operaciones RSA -> run_in_executor)                      │
+│  4. wait_for(read_encrypted_message, client_timeout)  [descifra]│
+│  5. loop.run_in_executor(executor, handle_request, ...)         │
+│  6. wait_for(write_encrypted_message, write_timeout)  [cifra]   │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │ (cola de tareas acotada)
                                 ▼
@@ -35,6 +39,12 @@ Clientes TCP (N conexiones simultáneas)
                    SQLAlchemy Engine (SQLite / PostgreSQL)
 ```
 
+Un cliente que no supera el handshake (certificado ausente, caducado,
+firmado por otra CA, firma inválida o tráfico sin cifrar) recibe
+`AUTH_FAILED` y se cierra su conexión **antes** de llegar al *router*.
+Los detalles criptográficos están en [`SECURITY.md`](SECURITY.md) y el
+formato de las tramas en [`PROTOCOL.md`](PROTOCOL.md).
+
 ## 2. Ciclo de vida de una petición y apagado ordenado
 
 ```mermaid
@@ -45,14 +55,22 @@ sequenceDiagram
     participant E as ThreadPoolExecutor
     participant R as Router + UnitOfWork + BD
 
-    C->>L: Conexión TCP + Trama (!I + JSON)
+    C->>L: Conexión TCP
     L->>L: Comprueba Semaphore(max_connections)
-    L->>L: read_message(reader) [timeout: client_timeout]
+    C->>L: M1 client_hello (certificado, nonce_c)
+    L->>E: Valida certificado vs CA + firma M2 (RSA)
+    L->>C: M2 server_hello
+    C->>L: M3 client_proof
+    L->>E: Verifica firma + cifra clave AES (RSA-OAEP)
+    L->>C: M4 session_key
+    Note over C,L: Sesión AES-256-GCM establecida (si falla: AUTH_FAILED + cierre)
+    C->>L: Trama cifrada (!I + seq + ciphertext + tag)
+    L->>L: read_encrypted_message [timeout: client_timeout]
     L->>E: await run_in_executor(handle_request)
     E->>R: Abre Session nueva -> Ejecuta consulta -> Commit/Rollback -> Cierra Session
     R-->>E: Envelope respuesta (ok / error)
     E-->>L: Devuelve dict serializable
-    L->>C: write_message(writer) [timeout: write_timeout]
+    L->>C: write_encrypted_message [timeout: write_timeout]
 ```
 
 ### Protocolo de apagado ordenado (*Graceful Shutdown*)
@@ -69,6 +87,7 @@ Al recibir `SIGINT` o `SIGTERM` (o activarse `stop_event`):
 La codificación y decodificación de tramas se ha separado de la E/S de red:
 
 * **Núcleo puro (`encode_message`, `decode_header`, `decode_body`):** Opera exclusivamente sobre `bytes` y `dict`, validando el límite `MAX_MESSAGE_BYTES` (64 MiB) antes de reservar memoria para el cuerpo.
+* **Tramas cifradas (`encode_encrypted_message`, `decode_encrypted_body`):** Añaden el número de secuencia y delegan en `SessionCipher` (AES-256-GCM) sin tocar la E/S.
 * **Adaptador síncrono (`send_message`, `receive_message`):** Utilizado por `ServerGateway` (`src/client/gateway.py`).
 * **Adaptador asíncrono (`write_message`, `read_message`):** Utilizado por el servidor y por `AsyncServerGateway` (`src/client/async_gateway.py`), empleando `reader.readexactly(...)` para reensamblar tramas fragmentadas por TCP.
 
@@ -77,10 +96,12 @@ La codificación y decodificación de tramas se ha separado de la E/S de red:
 | Mecanismo | Parámetro CLI / Constante | Comportamiento ante fallo o saturación |
 | :--- | :--- | :--- |
 | **Control de admisión** | `--max-connections` (defecto: `100`) | Si el semáforo está lleno (`semaphore.locked()`), la conexión excedente se cierra de inmediato sin saturar memoria ni descriptores. |
-| **Inactividad de lectura** | `--client-timeout` (defecto: `60.0` s) | Desconecta clientes ociosos cuando expira `asyncio.wait_for(read_message(...))`. |
-| **Protección *slow-reader*** | `--write-timeout` (defecto: `10.0` s) | Cancela y cierra clientes que no vacían su ventana TCP al recibir respuestas. |
+| **Inactividad de lectura** | `--client-timeout` (defecto: `900.0` s) | Desconecta clientes ociosos cuando expira `asyncio.wait_for(read_message(...))`. |
+| **Protección *slow-reader*** | `DEFAULT_WRITE_TIMEOUT` (constante, `30.0` s) | Cancela y cierra clientes que no vacían su ventana TCP al recibir respuestas. |
 | **JSON o UTF-8 inválido** | `MalformedMessageError` | Responde `BAD_REQUEST` manteniendo alineado el flujo TCP para la siguiente trama. |
 | **Trama sobredimensionada** | `MessageTooLargeError` (`> 64 MiB`) | Responde `BAD_REQUEST` y cierra el socket para evitar desincronización del flujo. |
+| **Handshake mutuo** | `--handshake-timeout` (defecto: `10.0` s) | Si el cliente no completa M1→M4 a tiempo, o su certificado/firma es inválido, recibe `AUTH_FAILED` y se cierra la conexión. |
+| **Integridad de trama cifrada** | `CipherIntegrityError` | Tag GCM inválido, *replay* o secuencia incorrecta: responde `INTEGRITY_ERROR` y cierra el socket. |
 | **Aislamiento transaccional** | `UnitOfWork` por petición | Cada llamada en `Router` instancia su propia `Session` de SQLAlchemy; nunca se comparten sesiones ni objetos ORM entre hilos. |
 
 ## 5. Comparativa: Modelo Híbrido vs. Async SQLAlchemy 2.0
