@@ -1,12 +1,13 @@
-"""Generate a local PKI (Root CA, server, clients, and negative-test
-certificates).
+"""Generación automatizada de la infraestructura de clave pública (PKI) local.
 
-Creates X.509 v3 certificates signed with RSA-3072 + SHA-256 (PKCS#1 v1.5 for
-X.509
-compatibility across OpenSSL/cryptography, while handshake signatures use
-RSA-PSS).
+Crea certificados X.509 v3 firmados con claves RSA-3072 y SHA-256:
+- Root CA: Autoridad certificadora raíz con BasicConstraints ca=True.
+- Server: Certificado del servidor con ExtendedKeyUsage serverAuth y SAN.
+- Client 1 & 2: Certificados de cliente con ExtendedKeyUsage clientAuth.
+- Test Invalid: Certificado emitido por CA no confiable y certificado
+  caducado para pruebas negativas de seguridad.
 
-Usage:
+Uso:
     python scripts/gen_certs.py
     python scripts/gen_certs.py --out-dir certs --force
 """

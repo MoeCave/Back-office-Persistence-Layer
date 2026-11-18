@@ -1,4 +1,9 @@
-"""Generic base repository with shared CRUD operations."""
+"""Repositorio base genérico con operaciones CRUD estándar.
+
+Proporciona la implementación común de persistencia (add, get, get_all,
+count, update, delete) con tipos genéricos (TypeVar vinculado a Base). Los
+repositorios concretos inyectan su modelo y añaden consultas de dominio.
+"""
 
 from datetime import datetime, timezone
 from typing import Generic, List, Optional, Type, TypeVar

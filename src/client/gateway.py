@@ -1,13 +1,11 @@
-﻿"""
-client/gateway.py â€” TCP gateway used by all client-side menus.
+"""client/gateway.py — Pasarela TCP cliente para los menús de la interfaz.
 
-The ServerGateway replaces direct UnitOfWork calls on the client side.
-It wraps the protocol framing and exposes typed methods that mirror the
-server-side service interface.
+ServerGateway sustituye las llamadas directas a UnitOfWork en el cliente.
+Encapsula el enmarcado del protocolo, el handshake mutuo X.509 y el cifrado
+AES-256-GCM, exponiendo proxies tipados (fighters, tournaments, categories,
+matches, registrations) que reflejan los servicios del servidor.
 
-When a :class:`~src.common.handshake.ClientSecurityConfig` is supplied,
-``connect()`` performs mutual X.509 certificate authentication and all
-subsequent requests/responses are encrypted with AES-256-GCM.
+Garantiza que el cliente no importe SQLAlchemy ni la capa de persistencia.
 """
 
 from __future__ import annotations

@@ -1,6 +1,11 @@
 """
 UI helper functions: prompts, confirmations, table builders, pickers.
 All input/output goes through the shared `console` object.
+
+Organización del módulo:
+  1. Helpers de entrada (ask*, choose_from_list): leen del usuario.
+  2. Helpers de salida (section, success, error...): escriben en consola.
+  3. ``run_handler``: envoltorio que protege los menús de errores del servidor.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from src.client.gateway import ServerError
 
 from .console import console
 
+# Tipo genérico de los elementos que ``choose_from_list`` permite elegir.
 T = TypeVar("T")
 
 
@@ -42,7 +48,10 @@ def ask_optional(label: str) -> Optional[str]:
 
 
 def ask_int(label: str, default: Optional[int] = None) -> int:
-    """Ask for a required integer."""
+    """Ask for a required integer.
+
+    ``IntPrompt`` reitera la pregunta hasta recibir un entero válido.
+    """
     if default is not None:
         return IntPrompt.ask(
             f"[prompt]  {label}[/]", default=default, console=console
@@ -51,7 +60,11 @@ def ask_int(label: str, default: Optional[int] = None) -> int:
 
 
 def ask_int_optional(label: str) -> Optional[int]:
-    """Ask for an optional integer. Blank → None."""
+    """Ask for an optional integer. Blank → None.
+
+    Un valor no numérico también devuelve None (tras avisar al usuario),
+    por lo que el llamador no distingue "vacío" de "inválido".
+    """
     raw = ask_optional(label)
     if raw is None:
         return None
@@ -63,7 +76,7 @@ def ask_int_optional(label: str) -> Optional[int]:
 
 
 def ask_float_optional(label: str) -> Optional[float]:
-    """Ask for an optional float. Blank → None."""
+    """Ask for an optional float. Blank → None (o aviso si no es número)."""
     raw = ask_optional(label)
     if raw is None:
         return None
@@ -87,6 +100,11 @@ def choose_from_list(
     """
     Display a numbered list and let the user pick one item.
     Returns the selected item, or None if the user cancels.
+
+    Args:
+        items: Elementos a mostrar (numerados desde 1).
+        label_fn: Convierte cada elemento en la línea de texto visible.
+        title: Encabezado de la lista (también usado en el mensaje vacío).
     """
     if not items:
         console.print(f"[warning]  No {title} available.[/]")
@@ -97,6 +115,7 @@ def choose_from_list(
         console.print(f"  [muted]{i:>3}.[/] {label_fn(item)}")
     console.print("  [muted]  0.[/] Cancel")
 
+    # Bucle hasta recibir 0 (cancelar) o un índice dentro de rango.
     while True:
         choice = IntPrompt.ask(
             "[prompt]  Choose[/]", default=0, console=console
@@ -120,29 +139,38 @@ def section(title: str) -> None:
 
 
 def success(msg: str) -> None:
+    """Imprime un mensaje de éxito (verde, con ✓) rodeado de líneas en blanco."""
     console.print(f"\n[success]  ✓ {msg}[/]\n")
 
 
 def error(msg: str) -> None:
+    """Imprime un mensaje de error (rojo, con ✗) rodeado de líneas en blanco."""
     console.print(f"\n[error]  ✗ {msg}[/]\n")
 
 
 def info(msg: str) -> None:
+    """Imprime un mensaje informativo atenuado (sin decoración)."""
     console.print(f"[info]  {msg}[/]")
 
 
 def show_panel(title: str, content: str, style: str = "cyan") -> None:
+    """Muestra *content* dentro de un panel con borde de color *style*."""
     console.print(
         Panel(content, title=f"[bold]{title}[/]", border_style=style)
     )
 
 
 def empty_table_msg(entity: str) -> None:
+    """Mensaje estándar cuando una consulta no devuelve filas."""
     console.print(f"[muted]  No {entity} found.[/]")
 
 
 def rel_badge(kind: str) -> Text:
-    """Return a styled relationship badge for table display."""
+    """Return a styled relationship badge for table display.
+
+    ``kind`` admite "1:1", "1:N", "N:M" y "N:M+attrs"; cualquier otro valor
+    se devuelve como texto sin estilo.
+    """
     badges = {
         "1:1": Text("1:1", style="rel_1_1 bold"),
         "1:N": Text("1:N", style="rel_1_n bold"),
@@ -184,6 +212,11 @@ def run_handler(handler: Callable[[Any], None], gateway: Any) -> None:
     """Run a menu action, reporting server errors without crashing.
 
     A lost connection is re-raised so the application can exit cleanly.
+
+    Orden de captura (importa): ``ConnectionError`` primero para que la caída
+    del socket suba hasta ``client.py``; luego ``ServerError`` (error de
+    negocio, se muestra); por último cualquier otra excepción, para que un
+    fallo en un menú no cierre toda la aplicación.
     """
     try:
         handler(gateway)

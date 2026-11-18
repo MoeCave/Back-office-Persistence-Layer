@@ -1,9 +1,8 @@
-"""
-dto.py — Data Transfer Objects for client/server communication.
+"""dto.py — Objetos de Transferencia de Datos (DTOs) cliente/servidor.
 
-These plain dataclasses decouple the wire format from SQLAlchemy models.
-All serialisation (to/from dict) lives here so both client and server
-can share the same schema without importing ORM internals.
+Dataclasses puras que desacoplan el formato de red de los modelos ORM de
+SQLAlchemy. Centralizan serialización y deserialización (to_dict / from_dict)
+para que cliente y servidor compartan el esquema sin importar ORM en cliente.
 """
 
 from __future__ import annotations

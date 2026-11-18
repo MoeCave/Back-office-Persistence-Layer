@@ -1,16 +1,14 @@
-"""Cryptographic primitives for mutual certificate authentication and
-AES-256-GCM.
+"""Cryptographic primitives for mutual certificate authentication and AES-GCM.
 
-Implements:
-- X.509 certificate loading and strict validation against a trusted Root CA
-  (signature, UTC validity window, BasicConstraints, ExtendedKeyUsage, SAN).
-- RSA-PSS (SHA-256, max salt length) signatures for handshake Proof of
-Possession.
-- RSA-OAEP (SHA-256, MGF1-SHA256) key transport binding session_key || nonce_c
-|| nonce_s.
-- AES-256-GCM authenticated symmetric channel with directional monotonic 64-bit
-  sequence counters and handshake-bound AAD to prevent replay, reordering, and
-  reflection.
+Primitivas criptográficas para autenticación mutua y cifrado de sesión.
+Implementa:
+- Validación de certificados X.509 v3 frente a Root CA (firma, validez UTC,
+  BasicConstraints ca=False, ExtendedKeyUsage y SAN).
+- Firmas RSA-PSS (SHA-256, MGF1, sal máxima) para prueba de posesión (M2, M3).
+- Transporte de clave de sesión efímera con RSA-OAEP (SHA-256, MGF1)
+  vinculando K_ses || nonce_c || nonce_s.
+- Canal simétrico autenticado con AES-256-GCM, contadores monótonos de 64 bits
+  independientes por dirección y AAD ligado al transcript del handshake.
 """
 
 from __future__ import annotations
@@ -131,32 +129,27 @@ def validate_peer_certificate(
     expected_hostname: str | None = None,
     now: dt.datetime | None = None,
 ) -> rsa.RSAPublicKey:
-    """Validate an end-entity X.509 certificate against a trusted Root CA.
+    """Valida un certificado X.509 de entidad final contra la Root CA.
 
-    Checks performed:
-    1. Issuer DN matches CA Subject DN.
-    2. Cryptographic signature of `cert` verifies under `ca_cert.public_key()`.
-    3. Current UTC timestamp lies within `[not_valid_before_utc,
-    not_valid_after_utc]`.
-    4. `BasicConstraints` is present and `ca=False` (prevents CA cert
-    impersonation).
-    5. `ExtendedKeyUsage` contains `SERVER_AUTH` (if `expect_server`) or
-    `CLIENT_AUTH`.
-    6. If `expected_hostname` is provided (for server certs), it matches a SAN
-    DNSName or IPAddress.
-    7. Public key is RSA with at least 2048 bits.
+    Comprobaciones realizadas:
+    1. Issuer DN coincide con el Subject de la CA.
+    2. La firma del certificado valida bajo la clave pública de la CA.
+    3. Fecha UTC dentro de [not_valid_before_utc, not_valid_after_utc].
+    4. BasicConstraints está presente y declara ca=False.
+    5. ExtendedKeyUsage contiene SERVER_AUTH o CLIENT_AUTH.
+    6. Coincidencia de SAN (DNSName o IPAddress) para el servidor.
+    7. Clave pública RSA con al menos 2048 bits.
 
-    Returns the validated `RSAPublicKey` of the peer.
+    Retorna la clave pública RSA validada del interlocutor.
     """
-    # 1. Issuer == CA Subject
+    # 1. Issuer coincide con el Subject de la CA raíz
     if cert.issuer != ca_cert.subject:
         raise CertificateValidationError(
             f"Certificate issuer '{cert.issuer.rfc4514_string()}' does not "
-            f"match "
-            f"trusted CA '{ca_cert.subject.rfc4514_string()}'"
+            f"match trusted CA '{ca_cert.subject.rfc4514_string()}'"
         )
 
-    # 2. CA signature verification
+    # 2. Verificación de la firma con la clave pública de la CA
     try:
         cert.verify_directly_issued_by(ca_cert)
     except Exception as exc:
@@ -164,7 +157,7 @@ def validate_peer_certificate(
             f"Certificate signature verification against CA failed: {exc}"
         ) from exc
 
-    # 3. Temporal validity window (UTC)
+    # 3. Ventana temporal de validez en UTC
     check_time = now or dt.datetime.now(dt.timezone.utc)
     if check_time < cert.not_valid_before_utc:
         raise CertificateValidationError(
@@ -176,7 +169,7 @@ def validate_peer_certificate(
             f"Certificate expired on {cert.not_valid_after_utc.isoformat()}"
         )
 
-    # 4. BasicConstraints must explicitly forbid CA usage on end-entity certs
+    # 4. BasicConstraints prohíbe ca=True en entidades finales
     try:
         bc = cert.extensions.get_extension_for_class(
             x509.BasicConstraints
@@ -190,7 +183,7 @@ def validate_peer_certificate(
             "End-entity certificate cannot have BasicConstraints ca=True"
         )
 
-    # 5. ExtendedKeyUsage role enforcement
+    # 5. Control de roles mediante ExtendedKeyUsage
     try:
         eku = cert.extensions.get_extension_for_class(
             x509.ExtendedKeyUsage
@@ -211,12 +204,11 @@ def validate_peer_certificate(
             f"Certificate ExtendedKeyUsage lacks required '{role}'"
         )
 
-    # 6. Optional SAN hostname/IP verification (used by client to verify server
-    # identity)
+    # 6. Verificación de SAN (DNS e IP)
     if expected_hostname is not None:
         _verify_san_hostname(cert, expected_hostname)
 
-    # 7. Public key type & minimum strength
+    # 7. Algoritmo y fortaleza mínima de la clave pública
     pub_key = cert.public_key()
     if not isinstance(pub_key, rsa.RSAPublicKey):
         raise CertificateValidationError(
@@ -309,7 +301,12 @@ def wrap_session_key(
     nonce_c: bytes,
     nonce_s: bytes,
 ) -> bytes:
-    """Encrypt `session_key || nonce_c || nonce_s` using RSA-OAEP (SHA-256)."""
+    """Cifra `session_key || nonce_c || nonce_s` con RSA-OAEP (SHA-256).
+
+    Al empaquetar la clave simétrica junto a ambos nonces del handshake,
+    se vincula el secreto de sesión a esta conexión exacta, impidiendo
+    ataques de repetición o inyección de claves de sesiones previas.
+    """
     if len(session_key) != AES_KEY_SIZE:
         raise ValueError(f"session_key must be {AES_KEY_SIZE} bytes")
     if len(nonce_c) != NONCE_SIZE or len(nonce_s) != NONCE_SIZE:
@@ -332,7 +329,7 @@ def unwrap_session_key(
     expected_nonce_c: bytes,
     expected_nonce_s: bytes,
 ) -> bytes:
-    """Decrypt RSA-OAEP session key blob and verify handshake nonces match."""
+    """Descifra sobre RSA-OAEP y comprueba nonces del handshake actual."""
     try:
         payload = client_private_key.decrypt(
             encrypted_blob,
@@ -357,6 +354,7 @@ def unwrap_session_key(
     nonce_c = payload[AES_KEY_SIZE : AES_KEY_SIZE + NONCE_SIZE]
     nonce_s = payload[AES_KEY_SIZE + NONCE_SIZE :]
 
+    # Verificar coincidencia estricta de nonces
     if nonce_c != expected_nonce_c or nonce_s != expected_nonce_s:
         raise HandshakeCryptoError(
             "Session key nonces do not match current handshake"
@@ -366,19 +364,21 @@ def unwrap_session_key(
 
 
 # ---------------------------------------------------------------------------
-# Authenticated symmetric session channel (AES-256-GCM)
+# Canal simétrico autenticado de sesión (AES-256-GCM)
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class SessionCipher:
-    """Stateful AES-256-GCM symmetric cipher for an established session.
+    """Cifrador de sesión simétrico y con estado basado en AES-256-GCM.
 
-    Maintains independent strict monotonic 64-bit sequence counters for
-    outbound
-    (`send_seq`) and inbound (`recv_seq`) frames, preventing replay,
-    reordering,
-    and cross-direction reflection attacks.
+    Mantiene contadores monótonos de secuencia de 64 bits independientes para
+    tramas salientes (`send_seq`) y entrantes (`recv_seq`).
+    Garantiza:
+    - Confidencialidad e integridad autenticada (tag GCM de 128 bits).
+    - Prevención de ataques de reproducción (replay) y reordenación.
+    - Prevención de ataques de reflexión (etiquetas direccionales C2S y S2C).
+    - Autenticación del transcript del handshake como AAD.
     """
 
     session_key: bytes
@@ -399,17 +399,19 @@ class SessionCipher:
 
     @staticmethod
     def _build_nonce(direction: Direction, seq: int) -> bytes:
+        """Construye un nonce de 96 bits: 4B dirección + 8B contador uint64."""
         if not (0 <= seq <= MAX_SEQUENCE_NUMBER):
             raise CipherIntegrityError(f"Sequence number out of bounds: {seq}")
         return direction.value + struct.pack(">Q", seq)
 
     def _build_aad(self, direction: Direction, seq: int) -> bytes:
+        """Construye AAD: dirección + seq + hash acumulado de transcript."""
         return direction.value + struct.pack(">Q", seq) + self.transcript_hash
 
     def encrypt_frame(self, plaintext: bytes) -> tuple[int, bytes]:
-        """Encrypt `plaintext` under the next outbound sequence number.
+        """Cifra el texto plano bajo el siguiente número de secuencia.
 
-        Returns `(seq, ciphertext_with_tag)` and increments `self.send_seq`.
+        Retorna `(seq, ciphertext_with_tag)` e incrementa `self.send_seq`.
         """
         seq = self.send_seq
         nonce = self._build_nonce(self.send_direction, seq)
@@ -419,12 +421,10 @@ class SessionCipher:
         return seq, ciphertext
 
     def decrypt_frame(self, seq: int, ciphertext: bytes) -> bytes:
-        """Verify `seq == self.recv_seq` and decrypt `ciphertext` with
-        AES-256-GCM.
+        """Verifica `seq == self.recv_seq` y descifra con AES-256-GCM.
 
-        Raises `CipherIntegrityError` if the sequence number is unexpected or
-        if
-        the 128-bit GCM authentication tag fails verification.
+        Lanza `CipherIntegrityError` si la secuencia no es la esperada
+        o si el tag GCM de 128 bits falla la verificación de integridad.
         """
         if seq != self.recv_seq:
             raise CipherIntegrityError(

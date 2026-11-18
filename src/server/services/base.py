@@ -1,4 +1,9 @@
-"""Common base class for all services."""
+"""Clase base común para todos los servicios de negocio del servidor.
+
+Cada servicio es sin estado (stateless): cada llamada a un método abre
+su propia UnitOfWork vinculada a la factoría de sesiones, asegurando
+atomicidad transaccional y aislamiento entre peticiones concurrentes.
+"""
 
 from __future__ import annotations
 

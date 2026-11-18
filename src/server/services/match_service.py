@@ -1,4 +1,8 @@
-"""Business operations for the Match domain."""
+"""Operaciones de negocio para el agregado Match (Combates).
+
+Gestiona combates, asignación de esquinas azul y roja, registro de ganadores,
+tatamis y rondas eliminatorias.
+"""
 
 from __future__ import annotations
 

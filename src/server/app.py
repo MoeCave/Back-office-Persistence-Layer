@@ -1,15 +1,18 @@
 """TCP server: concurrent clients over asyncio streams.
 
-The server accepts multiple concurrent TCP connections via
-``asyncio.start_server``, enforces connection limits and I/O timeouts,
-offloads synchronous routing and database work to a bounded
-:class:`~concurrent.futures.ThreadPoolExecutor`, and replies
-asynchronously.
-
-When a :class:`~src.common.handshake.ServerSecurityConfig` is supplied,
-each connection performs mutual X.509 certificate authentication and
-establishes an AES-256-GCM encrypted session channel before any
-application request is accepted.
+Servidor TCP concurrente de alto rendimiento basado en flujos de asyncio.
+Arquitectura híbrida de dos niveles:
+1. Capa de red reactiva no bloqueante (Event Loop en el hilo principal):
+   - Acepta conexiones simultáneas con ``asyncio.start_server``.
+   - Control de admisión mediante ``asyncio.Semaphore(max_connections)``.
+   - Timeouts de inactividad de clientes y protección contra slow-writers.
+   - Handshake de autenticación mutua X.509 y cifrado AES-256-GCM.
+2. Capa de persistencia aislada en hilos trabajadores (ThreadPoolExecutor):
+   - Despacha consultas síncronas de base de datos a hilos 'db-worker-*'.
+   - Cada hilo abre su propia sesión de SQLAlchemy mediante UnitOfWork,
+     evitando condiciones de carrera y bloqueos del bucle de eventos.
+3. Apagado limpio y ordenado (Graceful Shutdown):
+   - Cancela clientes activos, cierra sockets y drena el pool de conexiones.
 """
 
 from __future__ import annotations

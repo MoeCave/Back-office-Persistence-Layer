@@ -1,7 +1,12 @@
-"""Conversion of ORM entities into DTOs (single source of truth).
+"""Conversión de entidades ORM de SQLAlchemy a DTOs tipados (SSOT).
 
-Services call these functions so that no ORM object ever leaves the
-server and every entity has exactly one serialisation rule.
+Los servicios invocan estas funciones para garantizar que ningún objeto ORM
+ni sesión escape fuera del servidor. Cada entidad cuenta con una regla única
+y determinista de serialización hacia diccionarios planos JSON.
+
+Convención: una función ``<entidad>_to_dto`` por modelo. Todas son puras
+(no tocan la sesión salvo para leer atributos ya cargados), por lo que deben
+llamarse DENTRO del bloque ``with uow`` mientras la sesión sigue abierta.
 """
 
 from __future__ import annotations
@@ -28,17 +33,32 @@ from src.server.dto import (
     format_datetime,
 )
 
+# Tipo genérico de la entidad ORM que se convierte en ``to_dicts``.
 T = TypeVar("T")
 
 
 def to_dicts(
     items: Iterable[T], converter: Callable[[T], Any]
 ) -> list[dict[str, Any]]:
-    """Convert every item with *converter* and return plain dicts."""
+    """Convert every item with *converter* and return plain dicts.
+
+    Args:
+        items: Entidades ORM (lista, resultado de consulta, relación...).
+        converter: Función ``*_to_dto`` que devuelve un DTO con ``to_dict``.
+
+    Returns:
+        Lista de diccionarios JSON-serializables, en el mismo orden.
+    """
     return [converter(item).to_dict() for item in items]
 
 
 def fighter_to_dto(fighter: Fighter) -> FighterDTO:
+    """Convierte un ``Fighter`` en ``FighterDTO``.
+
+    No incluye relaciones (ficha médica, inscripciones, combates): esas se
+    añaden explícitamente en ``FighterService.get_by_id``. Las fechas se
+    serializan a ISO-8601 mediante ``format_datetime``.
+    """
     return FighterDTO(
         fighter_id=fighter.fighter_id,
         first_name=fighter.first_name,
@@ -55,6 +75,7 @@ def fighter_to_dto(fighter: Fighter) -> FighterDTO:
 
 
 def medical_record_to_dto(record: MedicalRecord) -> MedicalRecordDTO:
+    """Convierte un ``MedicalRecord`` (relación 1:1 con Fighter) en DTO."""
     return MedicalRecordDTO(
         medical_record_id=record.medical_record_id,
         fighter_id=record.fighter_id,
@@ -66,6 +87,7 @@ def medical_record_to_dto(record: MedicalRecord) -> MedicalRecordDTO:
 
 
 def tournament_to_dto(tournament: Tournament) -> TournamentDTO:
+    """Convierte un ``Tournament`` en ``TournamentDTO`` (sin tatamis)."""
     return TournamentDTO(
         tournament_id=tournament.tournament_id,
         name=tournament.name,
@@ -78,6 +100,7 @@ def tournament_to_dto(tournament: Tournament) -> TournamentDTO:
 
 
 def tatami_to_dto(tatami: Tatami) -> TatamiDTO:
+    """Convierte un ``Tatami`` (relación 1:N con Tournament) en DTO."""
     return TatamiDTO(
         tatami_id=tatami.tatami_id,
         tournament_id=tatami.tournament_id,
@@ -89,6 +112,11 @@ def tatami_to_dto(tatami: Tatami) -> TatamiDTO:
 
 
 def category_to_dto(category: Category) -> CategoryDTO:
+    """Convierte una ``Category`` en ``CategoryDTO``.
+
+    Los contadores (``total_registrations``, ``total_matches``) los añade
+    ``CategoryService.get_by_id``; este convertidor no los calcula.
+    """
     return CategoryDTO(
         category_id=category.category_id,
         name=category.name,
@@ -100,6 +128,11 @@ def category_to_dto(category: Category) -> CategoryDTO:
 
 
 def match_to_dto(match: Match) -> MatchDTO:
+    """Convierte un ``Match`` en ``MatchDTO``.
+
+    Solo expone los IDs de esquina azul, roja y ganador; los nombres se
+    resuelven aparte en ``MatchService.get_by_id`` (``fighters_info``).
+    """
     return MatchDTO(
         match_id=match.match_id,
         tournament_id=match.tournament_id,
@@ -117,6 +150,11 @@ def match_to_dto(match: Match) -> MatchDTO:
 def registration_to_dto(
     registration: FighterCategoryRegistration,
 ) -> RegistrationDTO:
+    """Convierte una inscripción N:M con atributos en ``RegistrationDTO``.
+
+    La clave compuesta (fighter_id, category_id, tournament_id) viaja en el
+    DTO, de modo que el cliente puede identificar la fila sin ID propio.
+    """
     return RegistrationDTO(
         fighter_id=registration.fighter_id,
         category_id=registration.category_id,

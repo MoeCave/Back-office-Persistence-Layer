@@ -1,7 +1,9 @@
-"""Async SQLAlchemy 2.0 vertical slice (engine, UoW, and repository).
+"""Persistencia asíncrona con SQLAlchemy 2.0 (Engine, UoW y repositorio).
 
-Demonstrates native ``asyncio`` persistence using ``AsyncSession`` and
-``async_sessionmaker`` without offloading queries to worker threads.
+Demuestra la alternativa arquitectónica 100% nativa en ``asyncio``
+empleando ``AsyncEngine``, ``AsyncSession`` y ``async_sessionmaker`` sin
+delegar las consultas a un ThreadPool. Incluido como referencia de diseño y
+comparativa técnica frente al modelo híbrido (ver ASYNC_ARCHITECTURE.md).
 """
 
 from __future__ import annotations

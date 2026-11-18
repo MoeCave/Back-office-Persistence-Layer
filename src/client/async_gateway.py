@@ -1,11 +1,12 @@
 """Asynchronous TCP client gateway built on ``asyncio`` streams.
 
-Provides :class:`AsyncServerGateway` for issuing concurrent framed JSON
-requests against the TCP server without blocking an event loop.
+Pasarela cliente TCP asíncrona sobre flujos de ``asyncio``.
+Proporciona :class:`AsyncServerGateway` para emitir peticiones JSON enmarcadas
+concurrentes hacia el servidor TCP sin bloquear el bucle de eventos.
 
-When a :class:`~src.common.handshake.ClientSecurityConfig` is supplied,
-``connect()`` performs mutual X.509 certificate authentication and
-establishes an AES-256-GCM encrypted session channel.
+Si se proporciona :class:`~src.common.handshake.ClientSecurityConfig`,
+``connect()`` realiza autenticación mutua X.509 y establece un canal de sesión
+cifrado con AES-256-GCM.
 """
 
 from __future__ import annotations

@@ -1,9 +1,9 @@
-"""Declarative routing table: (resource, action) -> handler.
+"""Tabla de enrutamiento declarativa: (recurso, acción) -> manejador.
 
-Each handler receives the resource's service and the request payload.
-The small factories below build the handlers so that no routing logic
-is repeated.  The table is the single source of truth for the operations
-listed in ``docs/PROTOCOL.md``.
+Cada handler recibe el servicio del recurso y el payload de la petición.
+Las funciones factoría auxiliares construyen los manejadores reutilizables
+evitando duplicación de validaciones y extracción de IDs. Esta tabla
+constituye la fuente única de verdad (SSOT) de las operaciones de la API.
 """
 
 from __future__ import annotations

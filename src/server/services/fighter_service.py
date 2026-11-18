@@ -1,6 +1,8 @@
-"""Business operations for the Fighter domain.
+"""Operaciones de negocio para el agregado Fighter (Luchadores y Médica).
 
-All methods accept and return plain dicts (no ORM object leaks out).
+Todos los métodos reciben y devuelven diccionarios planos (DTOs), garantizando
+que ningún objeto ORM ni sesión de SQLAlchemy escape de la capa de servicio.
+Cada operación abre y cierra su propia UnitOfWork para atomicidad.
 """
 
 from __future__ import annotations

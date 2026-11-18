@@ -1,8 +1,8 @@
-"""Payload validation helpers shared by the router and the services.
+"""Ayudantes de validación y saneamiento de payloads del Router y servicios.
 
-Every helper raises :class:`~src.server.errors.ValidationError` so that
-malformed input is reported to the client instead of being silently
-ignored or turned into an internal error.
+Cada función lanza :class:`~src.server.errors.ValidationError` ante datos
+ausentes, tipos incorrectos o formatos no conformes, evitando que datos
+corruptos alcancen el dominio o provoquen errores internos no controlados.
 """
 
 from __future__ import annotations

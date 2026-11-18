@@ -1,12 +1,12 @@
-"""Forensic wire-traffic inspection and cryptographic overhead benchmark.
+"""Auditoría forense de tráfico de red y benchmark de sobrecarga criptográfica.
 
-Demonstrates:
-1. Live wire-level capture proving zero plaintext leakage after the 4-step
-   mutual X.509 + RSA-PSS + RSA-OAEP handshake.
-2. Active rejection of rogue/expired certificates and 1-bit ciphertext
-tampering.
-3. Latency & throughput comparison between plaintext TCP and AES-256-GCM
-   persistent sessions.
+Demuestra de forma práctica:
+1. Captura en cable demostrando 0% de filtración de texto plano post-handshake
+   (entropía de Shannon cercana a 8.0 bits/byte en tramas cifradas).
+2. Rechazo activo de certificados caducados o emitidos por CAs rogue,
+   y detección de manipulación de tramas de 1 solo bit (tampering / tag GCM).
+3. Comparativa de latencia y rendimiento (throughput) entre TCP en texto
+   plano y sesiones cifradas persistentes con AES-256-GCM.
 """
 
 from __future__ import annotations

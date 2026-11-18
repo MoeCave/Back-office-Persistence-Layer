@@ -1,4 +1,8 @@
-"""Business operations for the Tournament domain."""
+"""Operaciones de negocio para el agregado Tournament (Torneos y Tatamis).
+
+Gestiona creación, consulta, actualización, filtrado por fechas y tatamis.
+Todas las operaciones devuelven diccionarios serializables DTOs.
+"""
 
 from __future__ import annotations
 

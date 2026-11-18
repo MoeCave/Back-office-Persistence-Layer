@@ -1,4 +1,10 @@
-"""Unit of Work — one database session shared by all repositories."""
+"""Patrón Unit of Work — sesión de base de datos compartida por repositorios.
+
+Encapsula una transacción atómica de SQLAlchemy. Proporciona acceso a un
+repositorio por cada raíz de agregado (Fighter, Tournament, Category, Match,
+Registration). Si el bloque 'with' finaliza sin errores, confirma con commit();
+si ocurre una excepción, ejecuta rollback() y cierra la sesión en el finally.
+"""
 
 from __future__ import annotations
 

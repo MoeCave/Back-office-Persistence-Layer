@@ -1,10 +1,13 @@
-"""verify.py - quick sanity check for the whole project setup.
+"""verify.py — Comprobación de integridad y arquitectura del proyecto.
 
-Imports every layer, verifies the schema can be created in an in-memory
-SQLite database and checks that the client never loads SQLAlchemy.
-No external services are required.
+Verifica:
+1. Configuración y aislamiento de entorno (APP_ENV=test con SQLite en memoria).
+2. Creación del esquema de base de datos (7 tablas y columna last_update).
+3. Integridad de la tabla declarativa de rutas (5 recursos, 51 acciones).
+4. Aislamiento del cliente: valida que el cliente jamás importa SQLAlchemy,
+   modelos de dominio ni código del servidor.
 
-Usage:
+Uso:
     python verify.py
 """
 

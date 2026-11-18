@@ -1,4 +1,12 @@
-"""Business operations for the Category domain."""
+"""Operaciones de negocio para el agregado Category.
+
+Gestiona las divisiones de cinturón, peso y género, así como filtros de
+búsqueda por rango de peso.
+
+Patrón común a todos los métodos: abrir una UnitOfWork, operar con los
+repositorios, convertir a DTO DENTRO del ``with`` (la sesión debe seguir
+abierta para leer atributos/relaciones) y devolver diccionarios planos.
+"""
 
 from __future__ import annotations
 
@@ -17,10 +25,17 @@ class CategoryService(BaseService):
     # -- CRUD ----------------------------------------------------------
 
     def list_all(self) -> list[dict[str, Any]]:
+        """Devuelve todas las categorías como lista de DTOs (dict)."""
         with self._uow() as uow:
             return to_dicts(uow.categories.get_all(), category_to_dto)
 
     def get_by_id(self, category_id: int) -> dict[str, Any] | None:
+        """Devuelve una categoría con contadores de relaciones, o ``None``.
+
+        Añade ``total_registrations`` y ``total_matches``. Nota: usa
+        ``len()`` sobre las relaciones, lo que carga todas las filas en
+        memoria; un ``COUNT`` en SQL escalaría mejor.
+        """
         with self._uow() as uow:
             category = uow.categories.get(category_id)
             if category is None:
@@ -31,9 +46,18 @@ class CategoryService(BaseService):
             return result
 
     def create(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Crea una categoría.
+
+        Requiere ``name``; ``weight_min_kg``/``weight_max_kg`` deben ser
+        numéricos finitos si se envían. No comprueba que min <= max.
+
+        Raises:
+            ValidationError: nombre vacío o peso no numérico.
+        """
         name = clean_str(payload.get("name"))
         if not name:
             raise ValidationError("name is required.")
+        # Se validan los pesos ANTES de abrir la UoW para fallar rápido.
         weight_min = optional_number(payload, "weight_min_kg")
         weight_max = optional_number(payload, "weight_max_kg")
         with self._uow() as uow:
@@ -51,6 +75,16 @@ class CategoryService(BaseService):
     def update(
         self, category_id: int, payload: dict[str, Any]
     ) -> dict[str, Any]:
+        """Actualiza solo los campos presentes en *payload*.
+
+        Semántica: una clave ausente no se toca; ``belt_level``/``gender``
+        vacíos se guardan como ``None``; ``name`` vacío se ignora.
+
+        Raises:
+            NotFoundError: la categoría no existe.
+            ValidationError: algún peso no es numérico.
+        """
+        # Validación previa de pesos (solo los presentes en el payload).
         weights = {
             name: optional_number(payload, name)
             for name in ("weight_min_kg", "weight_max_kg")
@@ -71,6 +105,14 @@ class CategoryService(BaseService):
             return category_to_dto(category).to_dict()
 
     def delete(self, category_id: int) -> None:
+        """Elimina la categoría (y en cascada sus inscripciones).
+
+        Los combates asociados no se borran: su ``category_id`` pasa a NULL
+        (``ondelete="SET NULL"``).
+
+        Raises:
+            NotFoundError: la categoría no existe.
+        """
         with self._uow() as uow:
             category = self._get_or_raise(uow, category_id)
             uow.categories.delete(category)
@@ -79,16 +121,19 @@ class CategoryService(BaseService):
     # -- Searches ------------------------------------------------------
 
     def search_by_name(self, name: str) -> list[dict[str, Any]]:
+        """Busca por nombre (coincidencia parcial, sin distinguir mayúsculas)."""
         with self._uow() as uow:
             found = uow.categories.get_by_name(name)
             return to_dicts(found, category_to_dto)
 
     def search_by_belt_level(self, belt_level: str) -> list[dict[str, Any]]:
+        """Busca categorías de un nivel de cinturón exacto."""
         with self._uow() as uow:
             found = uow.categories.get_by_belt_level(belt_level)
             return to_dicts(found, category_to_dto)
 
     def search_by_gender(self, gender: str) -> list[dict[str, Any]]:
+        """Busca categorías de un género exacto."""
         with self._uow() as uow:
             found = uow.categories.get_by_gender(gender)
             return to_dicts(found, category_to_dto)
@@ -98,6 +143,12 @@ class CategoryService(BaseService):
         min_kg: Optional[float] = None,
         max_kg: Optional[float] = None,
     ) -> list[dict[str, Any]]:
+        """Busca categorías contenidas en el rango de peso indicado.
+
+        Cualquiera de los límites puede ser ``None`` (sin cota). Es
+        inclusión estricta: ``weight_min_kg >= min_kg`` y
+        ``weight_max_kg <= max_kg``, no solape de rangos.
+        """
         with self._uow() as uow:
             found = uow.categories.get_by_weight_range(
                 min_kg=min_kg, max_kg=max_kg
@@ -108,6 +159,7 @@ class CategoryService(BaseService):
 
     @staticmethod
     def _get_or_raise(uow, category_id: int) -> Category:
+        """Obtiene la categoría o lanza ``NotFoundError`` (→ NOT_FOUND)."""
         category = uow.categories.get(category_id)
         if category is None:
             raise NotFoundError(f"Category with id={category_id} not found.")

@@ -1,4 +1,17 @@
-"""Server entry point: start the concurrent asyncio TCP server."""
+"""Server entry point: start the concurrent asyncio TCP server.
+
+Punto de entrada del servidor: arranca el servidor TCP concurrente basado en
+asyncio.
+
+Gestiona:
+1. Parseo de opciones CLI (host, puerto, workers, límites y certificados).
+2. Carga y verificación de credenciales PKI del servidor (certificado X.509,
+   clave privada RSA y Root CA).
+3. Registro de manejadores de señales (SIGINT/SIGTERM) para apagado limpio
+   (graceful shutdown) compatible con POSIX y Windows.
+4. Ejecución del bucle asíncrono y liberación ordenada del pool de conexiones
+   de SQLAlchemy al finalizar.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +38,12 @@ log = logging.getLogger(__name__)
 
 
 def _parse_args() -> argparse.Namespace:
-    """Parse command-line options for the TCP server."""
+    """Parsea los argumentos de línea de comandos para el servidor TCP.
+
+    Configura los parámetros de enlace de red (host/puerto), el tamaño del pool
+    de workers para la persistencia, los límites de concurrencia y timeouts,
+    así como las rutas a los certificados X.509 de la PKI.
+    """
     parser = argparse.ArgumentParser(
         description="Tournament Back-Office TCP Server (asyncio)."
     )
@@ -110,7 +128,13 @@ def _install_signal_handlers(
     loop: asyncio.AbstractEventLoop,
     stop_event: asyncio.Event,
 ) -> None:
-    """Register SIGINT and SIGTERM handlers across POSIX and Windows."""
+    """Registra manejadores de señales (SIGINT, SIGTERM) multiplataforma.
+
+    En sistemas POSIX utiliza loop.add_signal_handler. En Windows (donde
+    ProactorEventLoop no soporta add_signal_handler) recurre a signal.signal
+    delegando de forma segura a través de loop.call_soon_threadsafe.
+    Al activarse la señal, activa stop_event iniciando el apagado ordenado.
+    """
 
     def _trigger_shutdown() -> None:
         if not stop_event.is_set():
@@ -138,7 +162,12 @@ async def _serve(
     args: argparse.Namespace,
     security: ServerSecurityConfig,
 ) -> None:
-    """Configure signal hooks and run the server until stopped."""
+    """Configura los hooks de apagado y ejecuta el servidor hasta su detención.
+
+    Inicia run_server con los parámetros configurados y, en la cláusula
+    finally, garantiza la liberación completa de conexiones activas en el
+    pool de SQLAlchemy llamando a engine.dispose().
+    """
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     _install_signal_handlers(loop, stop_event)
@@ -161,7 +190,12 @@ async def _serve(
 
 
 def main() -> None:
-    """Entry point invoked when running ``python server.py``."""
+    """Punto de entrada principal invocado con ``python server.py``.
+
+    Inicializa logging, carga las credenciales PKI del servidor validando que
+    los archivos de certificados y claves existan, y arranca el bucle de
+    eventos de asyncio protegiéndose contra interrupciones manuales del usuario.
+    """
     args = _parse_args()
     logging.basicConfig(
         level=getattr(logging, args.log_level),

@@ -1,13 +1,21 @@
 """Mutual certificate authentication and AES-256-GCM session establishment.
 
-Implements the 4-message handshake (M1 -> M4) over the repository's JSON
-framing (`read_message`/`write_message` and `receive_message`/`send_message`):
-    M1 (C -> S): {"type": "client_hello", "version": ..., "cert_pem": ...,
-    "nonce_c": ...}
-    M2 (S -> C): {"type": "server_hello", "version": ..., "cert_pem": ...,
-    "nonce_s": ..., "signature": ...}
-    M3 (C -> S): {"type": "client_proof", "signature": ...}
-    M4 (S -> C): {"type": "session_key", "encrypted_key": ...}
+Autenticación mutua con certificados X.509 y sesión AES-256-GCM.
+Implementa el intercambio estricto de 4 mensajes (M1 -> M4):
+  M1 (C -> S): {"type": "client_hello", "version": ..., "nonce_c": ...}
+      El cliente presenta su certificado X.509 y un reto nonce_c.
+  M2 (S -> C): {"type": "server_hello", "nonce_s": ..., "signature": ...}
+      El servidor valida el certificado de C, responde con cert_S, nonce_s
+      y firma RSA-PSS("SERVER_HELLO:" || nonce_c || nonce_s || sha256(cert_C)).
+  M3 (C -> S): {"type": "client_proof", "signature": ...}
+      El cliente valida cert_S, verifica M2 y demuestra posesión de clave
+      firmando ("CLIENT_PROOF:" || nonce_s || nonce_c || sha256(cert_S)).
+  M4 (S -> C): {"type": "session_key", "encrypted_key": ...}
+      El servidor verifica M3, genera la clave efímera AES-256 y la empaqueta
+      con RSA-OAEP vinculando ambos nonces.
+
+Ambos extremos calculan el SHA-256 del transcript completo (M1..M4)
+e inicializan su SessionCipher para el tráfico posterior.
 """
 
 from __future__ import annotations

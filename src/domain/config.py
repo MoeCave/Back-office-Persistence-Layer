@@ -1,11 +1,9 @@
-"""
-Database configuration — environment-aware URL selection.
-Follows the BandHub pattern: config lives inside src/domain/.
+"""Configuración de base de datos — Selección dinámica de URL de entorno.
 
-Set APP_ENV to switch between environments:
-    APP_ENV=test         → SQLite (no external service needed)
-    APP_ENV=development  → PostgreSQL (local Docker)
-    APP_ENV=production   → PostgreSQL (remote)
+Permite alternar entornos mediante la variable `APP_ENV`:
+    APP_ENV=test         → SQLite local en memoria/archivo
+    APP_ENV=development  → PostgreSQL local (Docker Compose)
+    APP_ENV=production   → PostgreSQL en producción
 """
 
 import os

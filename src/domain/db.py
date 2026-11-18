@@ -1,11 +1,10 @@
-"""
-Database engine and session factory.
-Follows the BandHub pattern: db.py lives inside src/domain/.
+"""Motor de base de datos y factoría de sesiones SQLAlchemy.
 
-Exports:
-    Base     — shared DeclarativeBase for all ORM models
-    engine   — SQLAlchemy engine wired to the current environment
-    Session  — configured sessionmaker
+Centraliza la configuración de persistencia del dominio.
+Exporta:
+    Base     — DeclarativeBase compartida por los modelos ORM y Alembic.
+    engine   — Instancia de Engine configurada según el entorno activo.
+    Session  — Factoría sessionmaker (autoflush=False, autocommit=False).
 """
 
 from sqlalchemy import create_engine, event

@@ -1,11 +1,17 @@
-"""
-client.py — runnable TCP client entry point.
+"""client.py — Punto de entrada ejecutable del cliente TCP de consola.
 
-Usage:
+Uso:
     python client.py
-    python client.py --host 127.0.0.1 --port 9000 --cert
-    certs/client1/client1.pem --key certs/client1/client1.key --ca
-    certs/ca/ca.pem
+    python client.py --host 127.0.0.1 --port 9000 \\
+                     --cert certs/client1/client1.pem \\
+                     --key certs/client1/client1.key \\
+                     --ca certs/ca/ca.pem
+
+Flujo de ejecución:
+1. Configura credenciales PKI del cliente (certificado X.509 y clave privada).
+2. Conecta por TCP al servidor y ejecuta el handshake mutuo (M1->M4).
+3. Tras autenticarse y negociar clave simétrica AES-256-GCM, inicia los menús.
+4. Desacoplado por completo de SQLAlchemy: solo interactúa con ServerGateway.
 """
 
 from __future__ import annotations
@@ -21,6 +27,13 @@ from src.common.handshake import ClientSecurityConfig
 
 
 def main() -> None:
+    """Punto de entrada del cliente interactivo TCP.
+
+    Parsea argumentos CLI, carga credenciales PKI del cliente y del CA,
+    establece la conexión segura autenticada mediante ServerGateway y ejecuta
+    el menú interactivo de la consola Rich. Maneja interrupciones y fallos de
+    red informando limpiamente en pantalla.
+    """
     parser = argparse.ArgumentParser(
         description="Tournament Back-Office TCP Client"
     )

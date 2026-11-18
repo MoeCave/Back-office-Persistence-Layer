@@ -1,4 +1,9 @@
-"""Business operations for fighter/category/tournament registrations."""
+"""Operaciones de negocio para inscripciones (FighterCategoryRegistration).
+
+Gestiona la relación N:M con atributos entre Luchador, Categoría y Torneo
+(clave primaria: fighter_id, category_id, tournament_id), controlando
+pesaje, aprobación de inscripción y comprobación de límites de aforo.
+"""
 
 from __future__ import annotations
 

@@ -1,8 +1,8 @@
-"""Typed errors raised by the server layers.
+"""Errores tipados de la aplicación lanzados por las capas del servidor.
 
-They all derive from ``ValueError`` so the original "expected failure"
-contract (``except ValueError``) keeps working, while the router can map
-each subclass to a machine-readable ``error_code``.
+Todas las excepciones heredan de ``ValueError`` para mantener compatibilidad
+con manejadores generales (``except ValueError``), permitiendo a su vez que el
+Router traduzca cada subclase a su código estructurado (``error_code``).
 """
 
 from __future__ import annotations

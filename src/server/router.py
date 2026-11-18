@@ -1,8 +1,12 @@
-"""Router: maps a validated request to a service call.
+"""Router: despacha peticiones validadas hacia el servicio correspondiente.
 
-The router is stateless.  It looks the handler up in the routing table
-(``src.server.routes``), runs it against the right service and converts
-the result, or any exception, into a protocol-ready response envelope.
+El Router no almacena estado propio. Consulta la tabla declarativa de rutas
+(``ROUTES`` en ``src.server.routes``), ejecuta el handler adecuado sobre el
+servicio pertinente y traduce el resultado o excepción a un sobre uniforme:
+- AppError (ValidationError, NotFoundError, ConflictError) -> error tipado
+- ValueError -> BAD_REQUEST
+- IntegrityError (violación de clave foránea o unicidad en BD) -> CONFLICT
+- Excepciones inesperadas -> INTERNAL_ERROR (sin filtrar trazas al cliente)
 """
 
 from __future__ import annotations
